@@ -31,6 +31,9 @@ test-results/
 *.webm
 *.jsonl
 
+# Academic papers (stored locally, not pushed to GitHub)
+docs/*.pdf
+
 # OS/editor
 .DS_Store
 .idea/

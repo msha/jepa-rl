@@ -10,11 +10,13 @@ experiment:
 
 game:
   name: breakout
-  url: "http://localhost:8000/breakout.html"
+  url: "file://games/breakout/index.html"
   headless: true
   fps: 30
   action_repeat: 4
-  max_steps_per_episode: 10000
+  max_steps_per_episode: 1000
+  done_selector: "#status[data-state='done']"
+  reset_key: Space
 
 actions:
   type: discrete_keyboard
@@ -38,4 +40,3 @@ evaluation:
   deterministic: true
   record_video: true
   save_best_by: mean_score
-

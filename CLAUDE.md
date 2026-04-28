@@ -32,14 +32,19 @@ Implemented now:
 - uv-managed environment: `uv sync` creates `.venv` and installs from `uv.lock`. Dev tooling (pytest, ruff) is in the `[dependency-groups].dev` table; runtime extras (`config`, `browser`, `train`, `all`) remain under `[project.optional-dependencies]`.
 - `jepa-rl validate-config`.
 - `jepa-rl init-run`.
+- `jepa-rl collect-random` for the local Breakout smoke game.
+- `jepa-rl train` for the current NumPy linear pixel-Q smoke model.
+- `jepa-rl eval` for the current `.npz` smoke-model checkpoints.
 - Typed config validation and starter configs.
+- Local Breakout-like HTML game at `games/breakout/index.html`.
+- Playwright screenshot environment and DOM score reader.
 - Discrete keyboard action parsing.
 - In-memory replay buffer and sequence sampling.
 - Unit tests for the implemented contracts.
 
 Run any project command via `uv run <cmd>` (e.g. `uv run pytest`, `uv run jepa-rl ...`). The Makefile wraps the common targets.
 
-Browser automation, score readers, model code, and training/evaluation loops are still planned. The commands `jepa-rl collect-random`, `jepa-rl train-world`, `jepa-rl train`, and `jepa-rl eval` currently return "not implemented yet" messages.
+The current `train` command is not the planned DQN/JEPA stack; it is a small linear Q-learning smoke path that proves browser control, reward reading, metrics, and checkpointing. `jepa-rl train-world` is still a planned stub.
 
 The directory may still not be a git repository. Do not run destructive git commands without first checking `git status`.
 

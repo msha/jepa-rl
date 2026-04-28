@@ -6,14 +6,17 @@ The first target is a Breakout-like browser game benchmark. Version 1 is complet
 
 ## Status
 
-This repository now has an initial Python scaffold: package metadata, a `jepa-rl` CLI, typed configuration loading and validation, starter configs, discrete keyboard action parsing, an in-memory replay buffer, run artifact directory creation, and unit tests. Browser automation, score readers, model code, and training loops are still upcoming.
+This repository now has an initial runnable browser-game scaffold: package metadata, a `jepa-rl` CLI, typed configuration loading and validation, starter configs, a local Breakout-like HTML game, Playwright browser control, screenshot observations, DOM score reading, discrete keyboard action parsing, an in-memory replay buffer, run artifact directory creation, a minimal NumPy pixel-Q smoke trainer, and unit tests.
 
 Implemented CLI commands:
 
 - `jepa-rl validate-config --config configs/games/breakout.yaml`
 - `jepa-rl init-run --config configs/games/breakout.yaml --experiment <name>`
+- `jepa-rl collect-random --config configs/games/breakout.yaml --experiment <name>`
+- `jepa-rl train --config configs/games/breakout.yaml --experiment <name>`
+- `jepa-rl eval --config configs/games/breakout.yaml --checkpoint <path>`
 
-Planned CLI commands currently return clear "not implemented yet" messages: `collect-random`, `train-world`, `train`, and `eval`.
+The current `train` command is a deliberately small linear Q-learning smoke path over downsampled pixels. It proves that the browser, actions, rewards, metrics, and checkpoint path work. It is not the planned DQN/JEPA implementation yet. `train-world` remains a planned stub.
 
 The canonical specification lives in:
 
@@ -22,7 +25,7 @@ The canonical specification lives in:
 - [DEVELOPMENT.md](DEVELOPMENT.md) — development methodology: per-phase verification gates, dependency graph, parallel-track decomposition, agent-dispatch playbook, and standard verification recipes.
 - [CLAUDE.md](CLAUDE.md) — guidance for AI-assisted development in this repo.
 
-Reference papers are stored under [docs/](docs/). See the [Reference Papers](#reference-papers) section.
+Reference papers are listed in the [Reference Papers](#reference-papers) section below. PDFs are stored locally in `docs/` but are not committed to the repository.
 
 ## Quickstart
 
@@ -31,19 +34,28 @@ This project uses [uv](https://docs.astral.sh/uv/) for environment and dependenc
 ```bash
 uv sync                                                            # creates .venv, installs project + dev deps from uv.lock
 uv run jepa-rl validate-config --config configs/games/breakout.yaml
+uv run jepa-rl validate-config --config configs/presets/tiny.yaml
+uv run jepa-rl validate-config --config configs/presets/small.yaml
+uv run jepa-rl validate-config --config configs/presets/base.yaml
 uv run pytest
 uv run ruff check src tests
 ```
 
-To pull in the optional runtime extras (config/browser/train/all):
+If Playwright reports that Chromium is missing, install it once:
 
 ```bash
-uv sync --all-extras                # everything
-uv sync --extra browser             # browser tooling only
-uv sync --extra train               # PyTorch + numpy
+uv run playwright install chromium
 ```
 
-`uv.lock` is committed; CI installs from it with `uv sync --frozen`.
+Run the local browser game and train the current smoke model:
+
+```bash
+uv run jepa-rl collect-random --config configs/games/breakout.yaml --experiment smoke_random --episodes 1 --max-steps 25
+uv run jepa-rl train --config configs/games/breakout.yaml --experiment smoke_train --steps 200 --learning-starts 0
+uv run jepa-rl eval --config configs/games/breakout.yaml --checkpoint runs/smoke_train/checkpoints/latest.npz --episodes 3
+```
+
+Add `--headed` to `collect-random`, `train`, or `eval` to watch Chromium play the local game. `uv.lock` is committed; CI installs from it with `uv sync --frozen`.
 
 ## Project Goals
 
@@ -548,18 +560,18 @@ These remain open from the design doc and should be resolved during implementati
 
 ## Reference Papers
 
-The PDFs under [docs/](docs/) directly motivate this design. Each paper informs a specific part of the roadmap:
+These papers directly motivate the design. Each informs a specific part of the roadmap. PDFs are stored locally in `docs/` but are **not committed to the repository** — download or locate them separately.
 
-| File | Paper | Informs |
-|---|---|---|
-| `2506.09985v1.pdf` | **V-JEPA 2**: Self-Supervised Video Models Enable Understanding, Prediction and Planning | Phase 0 passive video pretraining + Phase 2 action-conditioned post-training |
-| `2501.14622v4.pdf` | **ACT-JEPA**: Joint-Embedding Predictive Architecture for Efficient Policy Representation Learning | Action chunking, imitation warm-start, action-sequence prediction diagnostics |
-| `2510.00739v1.pdf` | **TD-JEPA**: Latent-Predictive Representations for Zero-Shot Reinforcement Learning | V2 policy-conditioned predictor, multi-step horizons, reward-free pretraining |
-| `2601.00844v1.pdf` | **Value-Guided Action Planning with JEPA World Models** | V3 value-shaped latent loss, high-score goal embeddings, latent action search |
-| `s41586-025-08744-2.pdf` | **DreamerV3**: Mastering Diverse Control Tasks through World Models | Robust default hyperparameters across games, latent actor-critic baseline |
-| `2310.16828v2.pdf` | **TD-MPC2**: Scalable, Robust World Models for Continuous Control | Future decoder-free latent MPC backend, hybrid/continuous action planning |
+| Paper | Informs |
+|---|---|
+| **V-JEPA 2**: Self-Supervised Video Models Enable Understanding, Prediction and Planning (2506.09985) | Phase 0 passive video pretraining + Phase 2 action-conditioned post-training |
+| **ACT-JEPA**: Joint-Embedding Predictive Architecture for Efficient Policy Representation Learning (2501.14622) | Action chunking, imitation warm-start, action-sequence prediction diagnostics |
+| **TD-JEPA**: Latent-Predictive Representations for Zero-Shot Reinforcement Learning (2510.00739) | V2 policy-conditioned predictor, multi-step horizons, reward-free pretraining |
+| **Value-Guided Action Planning with JEPA World Models** (2601.00844) | V3 value-shaped latent loss, high-score goal embeddings, latent action search |
+| **DreamerV3**: Mastering Diverse Control Tasks through World Models | Robust default hyperparameters across games, latent actor-critic baseline |
+| **TD-MPC2**: Scalable, Robust World Models for Continuous Control (2310.16828) | Future decoder-free latent MPC backend, hybrid/continuous action planning |
 
-EfficientZero and DreamerV2 are also referenced in [docs/design_doc.md §23](docs/design_doc.md) as comparison baselines but are not bundled as PDFs.
+EfficientZero and DreamerV2 are also referenced in [docs/design_doc.md §23](docs/design_doc.md) as comparison baselines.
 
 ## Version 1 Acceptance Criteria
 

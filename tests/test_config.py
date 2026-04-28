@@ -21,6 +21,24 @@ def test_load_breakout_config_merges_base_and_small_preset() -> None:
     assert config.replay.sequence_length == 16
 
 
+@pytest.mark.parametrize(
+    ("path", "width", "height", "latent_dim"),
+    [
+        ("configs/presets/tiny.yaml", 84, 84, 128),
+        ("configs/presets/small.yaml", 160, 120, 512),
+        ("configs/presets/base.yaml", 224, 224, 768),
+    ],
+)
+def test_presets_validate_as_full_configs(
+    path: str, width: int, height: int, latent_dim: int
+) -> None:
+    config = load_config(path)
+
+    assert config.observation.width == width
+    assert config.observation.height == height
+    assert config.world_model.latent_dim == latent_dim
+
+
 def test_tiny_preset_can_override_base_values(tmp_path) -> None:
     config_file = tmp_path / "tiny_breakout.yaml"
     base_config = Path("configs/base.yaml").resolve()

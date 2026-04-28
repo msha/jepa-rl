@@ -148,12 +148,22 @@ class GameConfig:
     action_repeat: int
     max_steps_per_episode: int
     reset_timeout_sec: float
+    done_selector: str | None
+    reset_key: str | None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GameConfig:
         browser = _str(data.get("browser", "chromium"), "game.browser")
         if browser not in {"chromium", "chrome"}:
             raise ConfigError("game.browser must be chromium or chrome")
+        done_selector = data.get("done_selector")
+        if done_selector is not None:
+            done_selector = _str(done_selector, "game.done_selector")
+
+        reset_key = data.get("reset_key")
+        if reset_key is not None:
+            reset_key = _str(reset_key, "game.reset_key")
+
         return cls(
             name=_str(data.get("name"), "game.name"),
             url=_str(data.get("url"), "game.url"),
@@ -167,6 +177,8 @@ class GameConfig:
             reset_timeout_sec=_positive_float(
                 data.get("reset_timeout_sec", 10), "game.reset_timeout_sec"
             ),
+            done_selector=done_selector,
+            reset_key=reset_key,
         )
 
 

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>JEPA-RL Breakout</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #111318;
+        color: #f4f6fb;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+      }
+
+      main {
+        width: min(92vw, 720px);
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 10px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .stats {
+        display: flex;
+        gap: 14px;
+        font-variant-numeric: tabular-nums;
+        font-size: 14px;
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        aspect-ratio: 4 / 3;
+        background: #07090d;
+        border: 1px solid #2d3442;
+        outline: none;
+      }
+
+      #status {
+        min-height: 22px;
+        margin-top: 8px;
+        color: #aeb8ca;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>JEPA-RL Breakout</h1>
+        <div class="stats">
+          <span>Score <strong id="score">0</strong></span>
+          <span>Lives <strong id="lives">3</strong></span>
+        </div>
+      </header>
+      <canvas id="game" width="640" height="480" tabindex="0"></canvas>
+      <div id="status" data-state="playing">Playing</div>
+    </main>
+
+    <script>
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+      const scoreEl = document.getElementById("score");
+      const livesEl = document.getElementById("lives");
+      const statusEl = document.getElementById("status");
+
+      const keys = new Set();
+      const paddle = { x: 270, y: 438, w: 100, h: 14, speed: 7 };
+      const ball = { x: 320, y: 330, r: 8, vx: 3.4, vy: -4.2 };
+      const brickRows = 5;
+      const brickCols = 10;
+      const brickGap = 6;
+      const brickW = 54;
+      const brickH = 18;
+      const brickOffsetX = 35;
+      const brickOffsetY = 52;
+      let bricks = [];
+      let score = 0;
+      let lives = 3;
+      let done = false;
+
+      function resetBricks() {
+        bricks = [];
+        for (let row = 0; row < brickRows; row += 1) {
+          for (let col = 0; col < brickCols; col += 1) {
+            bricks.push({
+              x: brickOffsetX + col * (brickW + brickGap),
+              y: brickOffsetY + row * (brickH + brickGap),
+              w: brickW,
+              h: brickH,
+              alive: true,
+              row,
+            });
+          }
+        }
+      }
+
+      function resetBall(direction = 1) {
+        ball.x = 320;
+        ball.y = 330;
+        ball.vx = 3.4 * direction;
+        ball.vy = -4.2;
+      }
+
+      function resetGame() {
+        score = 0;
+        lives = 3;
+        done = false;
+        paddle.x = 270;
+        resetBall(1);
+        resetBricks();
+        statusEl.dataset.state = "playing";
+        statusEl.textContent = "Playing";
+        updateStats();
+      }
+
+      function updateStats() {
+        scoreEl.textContent = String(score);
+        livesEl.textContent = String(lives);
+      }
+
+      function setDone(text) {
+        done = true;
+        statusEl.dataset.state = "done";
+        statusEl.textContent = text;
+      }
+
+      window.addEventListener("keydown", (event) => {
+        keys.add(event.key);
+        if ((event.key === " " || event.key === "Space" || event.key === "r") && done) {
+          resetGame();
+        }
+        if (["ArrowLeft", "ArrowRight", " "].includes(event.key)) {
+          event.preventDefault();
+        }
+      });
+
+      window.addEventListener("keyup", (event) => {
+        keys.delete(event.key);
+      });
+
+      function rectHitCircle(rect, circle) {
+        const closestX = Math.max(rect.x, Math.min(circle.x, rect.x + rect.w));
+        const closestY = Math.max(rect.y, Math.min(circle.y, rect.y + rect.h));
+        const dx = circle.x - closestX;
+        const dy = circle.y - closestY;
+        return dx * dx + dy * dy <= circle.r * circle.r;
+      }
+
+      function update() {
+        if (done) return;
+
+        if (keys.has("ArrowLeft")) paddle.x -= paddle.speed;
+        if (keys.has("ArrowRight")) paddle.x += paddle.speed;
+        paddle.x = Math.max(0, Math.min(canvas.width - paddle.w, paddle.x));
+
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+
+        if (ball.x <= ball.r || ball.x >= canvas.width - ball.r) {
+          ball.vx *= -1;
+          ball.x = Math.max(ball.r, Math.min(canvas.width - ball.r, ball.x));
+        }
+        if (ball.y <= ball.r) {
+          ball.vy *= -1;
+          ball.y = ball.r;
+        }
+
+        if (rectHitCircle(paddle, ball) && ball.vy > 0) {
+          const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+          ball.vx = hit * 5.2;
+          ball.vy = -Math.abs(ball.vy) - 0.02;
+          score += 1;
+        }
+
+        for (const brick of bricks) {
+          if (!brick.alive || !rectHitCircle(brick, ball)) continue;
+          brick.alive = false;
+          ball.vy *= -1;
+          score += 5 + (brickRows - brick.row);
+          break;
+        }
+
+        if (ball.y > canvas.height + ball.r) {
+          lives -= 1;
+          if (lives <= 0) {
+            setDone("Done");
+          } else {
+            resetBall(lives % 2 === 0 ? -1 : 1);
+          }
+        }
+
+        if (bricks.every((brick) => !brick.alive)) {
+          setDone("Cleared");
+        }
+        updateStats();
+      }
+
+      function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#07090d";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+        gradient.addColorStop(0, "#27d6a0");
+        gradient.addColorStop(0.55, "#64a8ff");
+        gradient.addColorStop(1, "#ffd166");
+
+        for (const brick of bricks) {
+          if (!brick.alive) continue;
+          ctx.fillStyle = gradient;
+          ctx.globalAlpha = 0.9 - brick.row * 0.08;
+          ctx.fillRect(brick.x, brick.y, brick.w, brick.h);
+          ctx.globalAlpha = 1;
+        }
+
+        ctx.fillStyle = "#f4f6fb";
+        ctx.fillRect(paddle.x, paddle.y, paddle.w, paddle.h);
+
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+        ctx.fillStyle = "#ff5a7a";
+        ctx.fill();
+
+        if (done) {
+          ctx.fillStyle = "rgba(7, 9, 13, 0.72)";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = "#f4f6fb";
+          ctx.font = "700 36px system-ui";
+          ctx.textAlign = "center";
+          ctx.fillText(statusEl.textContent, canvas.width / 2, canvas.height / 2);
+        }
+      }
+
+      function loop() {
+        update();
+        draw();
+        requestAnimationFrame(loop);
+      }
+
+      resetGame();
+      canvas.focus();
+      loop();
+    </script>
+  </body>
+</html>

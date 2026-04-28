@@ -1,3 +1,6 @@
+extends:
+  - ../base.yaml
+
 observation:
   width: 84
   height: 84
@@ -34,4 +37,3 @@ training:
   checkpoint_interval_steps: 1000
   planning_start_step: 0
   planning_eval_only_until: 0
-

@@ -90,30 +90,31 @@ References: design_doc §6 (Environment Interface), §15 (Browser Automation).
   - `read_score()`.
   - `is_done()`.
   - `render_video_frame()`.
-- [ ] P0 Implement Playwright Chromium runner.
-- [ ] P0 Use isolated browser contexts and dedicated browser profiles.
-- [ ] P0 Set fixed viewport from config.
-- [ ] P0 Implement screenshot observation mode.
+- [x] P0 Implement Playwright Chromium runner.
+- [x] P0 Use isolated browser contexts and dedicated browser profiles.
+- [x] P0 Set fixed viewport from config.
+- [x] P0 Implement screenshot observation mode.
 - [ ] P1 Implement canvas capture observation mode.
 - [ ] P1 Implement DOM-assisted observation mode (screenshot + DOM-extracted score/lives/timer).
-- [ ] P0 Implement resize, crop, normalize, grayscale, and frame stack wrappers.
+- [x] P0 Implement resize, grayscale, and frame stack wrappers.
+- [ ] P0 Implement crop and normalization wrappers.
 - [x] P0 Implement discrete keyboard action space.
 - [x] P0 Implement no-op action.
 - [x] P0 Implement key combination actions such as `ArrowLeft+Space`.
-- [ ] P0 Implement action repeat.
-- [ ] P0 Implement max steps per episode.
-- [ ] P0 Implement reset by page reload.
+- [x] P0 Implement action repeat.
+- [x] P0 Implement max steps per episode.
+- [x] P0 Implement reset by page reload.
 - [ ] P1 Implement reset by configured key or button.
 - [ ] P1 Implement reset by optional JavaScript callback (mark privileged).
 - [ ] P1 Implement full browser context restart fallback.
-- [ ] P0 Implement DOM score reader.
+- [x] P0 Implement DOM score reader.
 - [ ] P1 Implement OCR score reader fallback.
 - [ ] P1 Implement visual template score reader for digit sprites or lives icons.
-- [ ] P0 Implement terminal detection by max steps and configured done selector.
+- [x] P0 Implement terminal detection by max steps and configured done selector.
 - [ ] P1 Implement visual terminal detection hook.
 - [ ] P0 Save screenshots when score reading fails.
 - [ ] P0 Log reset failures and score-reader failures.
-- [ ] P0 Add random policy runner.
+- [x] P0 Add random policy runner.
 - [ ] P0 Add replay video recording for evaluation episodes.
 
 Definition of done:
@@ -200,6 +201,7 @@ References: design_doc §8 (Reinforcement Learning Agent).
 - [ ] P0 Implement training/evaluation alternation.
 - [ ] P0 Implement deterministic evaluation mode.
 - [ ] P0 Log episode return, score, TD error, loss, Q-value scale, action counts, and epsilon.
+- [x] P0 Add a temporary NumPy linear pixel-Q smoke trainer before full DQN lands.
 - [ ] P1 Implement prioritized replay integration.
 - [ ] P1 Implement reward clipping option.
 - [ ] P1 Add distributional DQN head as optional extension.
@@ -286,11 +288,11 @@ Definition of done:
 
 References: design_doc §13 (Evaluation), §24.6 (Updated Evaluation Metrics).
 
-- [ ] P0 Implement `jepa-rl eval`.
-- [ ] P0 Support deterministic action selection.
-- [ ] P0 Support configurable number of evaluation episodes.
+- [x] P0 Implement `jepa-rl eval` for the temporary linear pixel-Q checkpoint format.
+- [x] P0 Support deterministic action selection.
+- [x] P0 Support configurable number of evaluation episodes.
 - [ ] P0 Record videos for best and representative episodes.
-- [ ] P0 Report best, mean, median, and p95 score.
+- [x] P0 Report best, mean, median, and p95 score.
 - [ ] P1 Report score at 100k, 500k, 1M, and 5M environment steps.
 - [ ] P1 Report time to target score.
 - [ ] P1 Report sample efficiency relative to pixel DQN.
@@ -317,11 +319,11 @@ Definition of done:
 
 References: design_doc §20 (Recommended Initial Experiment).
 
-- [ ] P0 Pick the first Breakout-like browser game.
-- [ ] P0 Confirm license and local/reproducible access path.
+- [x] P0 Pick the first Breakout-like browser game.
+- [x] P0 Confirm license and local/reproducible access path.
 - [x] P0 Build `configs/games/breakout.yaml`.
-- [ ] P0 Validate score reader for Breakout.
-- [ ] P0 Validate reset logic for Breakout.
+- [x] P0 Validate score reader for Breakout.
+- [x] P0 Validate reset logic for Breakout.
 - [ ] P0 Measure random-policy baseline for Breakout.
 - [ ] P1 Add Snake config.
 - [ ] P1 Add Flappy Bird config.

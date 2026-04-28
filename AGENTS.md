@@ -32,14 +32,19 @@ Implemented now:
 - uv-managed environment: `uv sync` creates `.venv` and installs from `uv.lock`. Dev tooling (pytest, ruff) is declared in `[dependency-groups].dev`; runtime extras stay under `[project.optional-dependencies]` (`config`, `browser`, `train`, `all`).
 - `jepa-rl validate-config`.
 - `jepa-rl init-run`.
+- `jepa-rl collect-random` for the local Breakout smoke game.
+- `jepa-rl train` for the current NumPy linear pixel-Q smoke model.
+- `jepa-rl eval` for the current `.npz` smoke-model checkpoints.
 - Typed config validation and starter configs.
+- Local Breakout-like HTML game at `games/breakout/index.html`.
+- Playwright screenshot environment and DOM score reader.
 - Discrete keyboard action parsing.
 - In-memory replay buffer and sequence sampling.
 - Unit tests for the implemented contracts.
 
 Run any project command via `uv run <cmd>` (e.g. `uv run pytest`). The `Makefile` wraps the common targets and is the canonical reference for "how do I exercise this code path."
 
-Training and browser commands such as `jepa-rl collect-random`, `jepa-rl train-world`, `jepa-rl train`, and `jepa-rl eval` are still planned stubs. This directory may not be a git repository yet. Check the actual workspace before assuming package, test, or git commands exist.
+The current `train` command is not the planned DQN/JEPA stack; it is a small linear Q-learning smoke path that proves browser control, reward reading, metrics, and checkpointing. `jepa-rl train-world` is still a planned stub. This directory may not be a git repository yet. Check the actual workspace before assuming package, test, or git commands exist.
 
 ## Canonical Documents
 

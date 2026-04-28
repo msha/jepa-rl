@@ -14,6 +14,8 @@ game:
   action_repeat: 4
   max_steps_per_episode: 10000
   reset_timeout_sec: 10
+  done_selector: "#status[data-state='done']"
+  reset_key: Space
 
 observation:
   mode: screenshot
@@ -147,4 +149,3 @@ evaluation:
   deterministic: true
   record_video: true
   save_best_by: mean_score
-
