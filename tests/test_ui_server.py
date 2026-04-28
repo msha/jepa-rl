@@ -22,7 +22,7 @@ def test_render_ui_html_contains_game_and_training_controls() -> None:
 
     html = render_ui_html(state)
 
-    assert 'src="/game"' in html
+    assert 'src="/game' in html
     assert "startTraining" in html
     assert "stopTraining" in html
     assert "loss" in html

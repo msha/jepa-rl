@@ -189,7 +189,10 @@ class ObservationConfig:
     height: int
     grayscale: bool
     frame_stack: int
-    crop: tuple[int, int, int, int] | None
+    crop_top: int
+    crop_bottom: int
+    crop_left: int
+    crop_right: int
     normalize: bool
 
     @property
@@ -205,27 +208,17 @@ class ObservationConfig:
                 "observation.mode must be screenshot, canvas, dom_assisted, or hybrid"
             )
 
-        crop_raw = data.get("crop")
-        crop = None
-        if crop_raw is not None:
-            if (
-                not isinstance(crop_raw, list)
-                or len(crop_raw) != 4
-                or not all(isinstance(item, int) and item >= 0 for item in crop_raw)
-            ):
-                raise ConfigError("observation.crop must be null or [x, y, width, height]")
-            crop = tuple(crop_raw)  # type: ignore[assignment]
-            if crop[2] <= 0 or crop[3] <= 0:
-                raise ConfigError("observation.crop width and height must be positive")
-
         return cls(
             mode=mode,
             width=_positive_int(data.get("width", 84), "observation.width"),
             height=_positive_int(data.get("height", 84), "observation.height"),
             grayscale=_bool(data.get("grayscale", False), "observation.grayscale"),
             frame_stack=_positive_int(data.get("frame_stack", 4), "observation.frame_stack"),
-            crop=crop,
-            normalize=_bool(data.get("normalize", True), "observation.normalize"),
+            crop_top=_nonnegative_int(data.get("crop_top", 0), "observation.crop_top"),
+            crop_bottom=_nonnegative_int(data.get("crop_bottom", 0), "observation.crop_bottom"),
+            crop_left=_nonnegative_int(data.get("crop_left", 0), "observation.crop_left"),
+            crop_right=_nonnegative_int(data.get("crop_right", 0), "observation.crop_right"),
+            normalize=_bool(data.get("normalize", False), "observation.normalize"),
         )
 
 
@@ -743,6 +736,25 @@ class EvaluationConfig:
 
 
 @dataclass(frozen=True)
+class RecordingConfig:
+    """Controls optional episode video recording during training and evaluation."""
+
+    enabled: bool
+    fps: int
+    dir: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> RecordingConfig:
+        if data is None:
+            data = {}
+        return cls(
+            enabled=_bool(data.get("enabled", False), "recording.enabled"),
+            fps=_positive_int(data.get("fps", 30), "recording.fps"),
+            dir=_str(data.get("dir", ""), "recording.dir", allow_empty=True),
+        )
+
+
+@dataclass(frozen=True)
 class ProjectConfig:
     experiment: ExperimentConfig
     game: GameConfig
@@ -755,6 +767,7 @@ class ProjectConfig:
     exploration: ExplorationConfig
     training: TrainingConfig
     evaluation: EvaluationConfig
+    recording: RecordingConfig
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ProjectConfig:
@@ -770,6 +783,7 @@ class ProjectConfig:
             exploration=ExplorationConfig.from_dict(_require_mapping(data, "exploration")),
             training=TrainingConfig.from_dict(_require_mapping(data, "training")),
             evaluation=EvaluationConfig.from_dict(_require_mapping(data, "evaluation")),
+            recording=RecordingConfig.from_dict(data.get("recording")),
         )
         config.validate_cross_fields()
         return config

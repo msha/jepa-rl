@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -131,29 +130,8 @@ def _cmd_ml_smoke(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_dashboard(args: argparse.Namespace) -> int:
-    import webbrowser
-
-    from jepa_rl.utils.dashboard import write_training_dashboard
-
-    try:
-        dashboard = write_training_dashboard(args.run)
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"dashboard failed: {exc}", file=sys.stderr)
-        return 2
-
-    print(f"dashboard written: {dashboard}")
-    if args.open:
-        webbrowser.open(dashboard.resolve().as_uri())
-    return 0
-
-
 def _cmd_ui(args: argparse.Namespace) -> int:
     from jepa_rl.ui.server import run_ui_server
-
-    if args.config is None and args.run is None:
-        print("ui requires --config or --run", file=sys.stderr)
-        return 2
 
     try:
         run_ui_server(
@@ -197,7 +175,12 @@ def _cmd_collect_random(args: argparse.Namespace) -> int:
     metrics_path = run_dir / "metrics" / "random_events.jsonl"
     try:
         with (
-            PlaywrightBrowserGameEnv(config, headless=not args.headed) as env,
+            PlaywrightBrowserGameEnv(
+                config,
+                headless=not args.headed,
+                run_dir=run_dir,
+                record_video=config.recording.enabled,
+            ) as env,
             metrics_path.open("w", encoding="utf-8") as metrics,
         ):
             for episode in range(args.episodes):
@@ -235,23 +218,40 @@ def _cmd_collect_random(args: argparse.Namespace) -> int:
 
 def _cmd_train(args: argparse.Namespace) -> int:
     from jepa_rl.browser.playwright_env import BrowserEnvError
-    from jepa_rl.training.simple_q import train_linear_q
 
     try:
         config = load_config(args.config)
-        summary = train_linear_q(
-            config,
-            experiment=args.experiment,
-            steps=args.steps,
-            learning_starts=args.learning_starts,
-            lr=args.lr,
-            headless=not args.headed,
-            batch_size=args.batch_size,
-            dashboard_every=args.dashboard_every,
-        )
     except ConfigError as exc:
         print(f"config invalid: {exc}", file=sys.stderr)
         return 2
+
+    try:
+        algorithm = config.agent.algorithm
+        if algorithm == "dqn":
+            from jepa_rl.training.pixel_dqn import train_dqn
+
+            summary = train_dqn(
+                config,
+                experiment=args.experiment,
+                steps=args.steps,
+                learning_starts=args.learning_starts,
+                headless=not args.headed,
+                batch_size=args.batch_size,
+                dashboard_every=args.dashboard_every,
+            )
+        else:
+            from jepa_rl.training.simple_q import train_linear_q
+
+            summary = train_linear_q(
+                config,
+                experiment=args.experiment,
+                steps=args.steps,
+                learning_starts=args.learning_starts,
+                lr=args.lr,
+                headless=not args.headed,
+                batch_size=args.batch_size,
+                dashboard_every=args.dashboard_every,
+            )
     except (BrowserEnvError, ValueError) as exc:
         print(f"train failed: {exc}", file=sys.stderr)
         return 2
@@ -275,19 +275,33 @@ def _cmd_train(args: argparse.Namespace) -> int:
 
 def _cmd_eval(args: argparse.Namespace) -> int:
     from jepa_rl.browser.playwright_env import BrowserEnvError
-    from jepa_rl.training.simple_q import evaluate_linear_q
 
     try:
         config = load_config(args.config)
-        summary = evaluate_linear_q(
-            config,
-            checkpoint=args.checkpoint,
-            episodes=args.episodes,
-            headless=not args.headed,
-        )
     except ConfigError as exc:
         print(f"config invalid: {exc}", file=sys.stderr)
         return 2
+
+    try:
+        algorithm = config.agent.algorithm
+        if algorithm == "dqn":
+            from jepa_rl.training.pixel_dqn import evaluate_dqn
+
+            summary = evaluate_dqn(
+                config,
+                checkpoint=args.checkpoint,
+                episodes=args.episodes,
+                headless=not args.headed,
+            )
+        else:
+            from jepa_rl.training.simple_q import evaluate_linear_q
+
+            summary = evaluate_linear_q(
+                config,
+                checkpoint=args.checkpoint,
+                episodes=args.episodes,
+                headless=not args.headed,
+            )
     except (BrowserEnvError, ValueError, FileNotFoundError) as exc:
         print(f"eval failed: {exc}", file=sys.stderr)
         return 2
@@ -303,13 +317,47 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_not_implemented(args: argparse.Namespace) -> int:
+def _cmd_train_world(args: argparse.Namespace) -> int:
+    from jepa_rl.browser.playwright_env import BrowserEnvError
+
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"config invalid: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        from jepa_rl.training.jepa_world import train_jepa_world
+
+        summary = train_jepa_world(
+            config,
+            experiment=args.experiment,
+            steps=args.steps,
+            collect_steps=args.collect_steps,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            headless=not args.headed,
+            dashboard_every=args.dashboard_every,
+        )
+    except (BrowserEnvError, ValueError) as exc:
+        print(f"train-world failed: {exc}", file=sys.stderr)
+        return 2
+
     print(
-        f"`jepa-rl {args.command}` is planned but not implemented yet. "
-        "Use `jepa-rl validate-config` and `jepa-rl init-run` in the current scaffold.",
-        file=sys.stderr,
+        "train-world complete: "
+        f"run_dir={summary.run_dir} "
+        f"checkpoint={summary.checkpoint} "
+        f"steps={summary.steps} "
+        f"device={summary.device} "
+        f"replay={summary.replay_size} "
+        f"initial_loss={summary.initial_loss:.6f} "
+        f"final_loss={summary.final_loss:.6f} "
+        f"improvement={summary.improvement:.6f} "
+        f"latent_std={summary.latent_std_mean:.4f} "
+        f"eff_rank={summary.effective_rank:.2f} "
+        f"dashboard={summary.dashboard}"
     )
-    return 2
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -366,20 +414,15 @@ def build_parser() -> argparse.ArgumentParser:
     ml_smoke.add_argument("--seed", type=int, default=0, help="Random seed.")
     ml_smoke.set_defaults(func=_cmd_ml_smoke)
 
-    dashboard = subparsers.add_parser("dashboard", help="Generate a training dashboard HTML file.")
-    dashboard.add_argument("--run", type=Path, required=True, help="Run directory.")
-    dashboard.add_argument("--open", action="store_true", help="Open dashboard in the browser.")
-    dashboard.set_defaults(func=_cmd_dashboard)
-
     ui = subparsers.add_parser(
         "ui",
-        help="Live training dashboard. Use --config for interactive mode or --run to view an existing run.",
+        help="Live training dashboard and control panel.",
     )
     ui.add_argument(
-        "--config", type=Path, default=None, help="Config YAML (interactive training mode)."
+        "--config", type=Path, default=None, help="Config YAML file."
     )
     ui.add_argument(
-        "--run", type=Path, default=None, help="Run directory to view (read-only mode)."
+        "--run", type=Path, default=None, help="Run directory to view."
     )
     ui.add_argument("--host", type=str, default="127.0.0.1", help="HTTP bind host.")
     ui.add_argument("--port", type=int, default=8765, help="HTTP bind port.")
@@ -412,8 +455,38 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--headed", action="store_true", help="Show the browser window.")
     collect.set_defaults(func=_cmd_collect_random)
 
-    train_world = subparsers.add_parser("train-world", help="Planned train-world command.")
-    train_world.set_defaults(func=_cmd_not_implemented, command="train-world")
+    train_world = subparsers.add_parser(
+        "train-world", help="Train the JEPA action-conditioned world model offline."
+    )
+    train_world.add_argument(
+        "--config", type=Path, required=True, help="Path to a config YAML file."
+    )
+    train_world.add_argument(
+        "--experiment", type=str, default=None, help="Optional run directory name."
+    )
+    train_world.add_argument(
+        "--steps", type=int, default=1000, help="Number of gradient updates."
+    )
+    train_world.add_argument(
+        "--collect-steps",
+        type=int,
+        default=None,
+        help="Browser env steps for random data collection before training.",
+    )
+    train_world.add_argument(
+        "--batch-size", type=int, default=None, help="Sequence batch size override."
+    )
+    train_world.add_argument(
+        "--lr", type=float, default=None, help="Learning rate override."
+    )
+    train_world.add_argument(
+        "--dashboard-every",
+        type=int,
+        default=25,
+        help="Rewrite dashboard every N gradient steps. 0 = only at end.",
+    )
+    train_world.add_argument("--headed", action="store_true", help="Show the browser window.")
+    train_world.set_defaults(func=_cmd_train_world)
 
     train = subparsers.add_parser("train", help="Train the current minimal pixel Q model.")
     train.add_argument("--config", type=Path, required=True, help="Path to a config YAML file.")
@@ -445,7 +518,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     evaluate = subparsers.add_parser("eval", help="Evaluate a trained linear Q checkpoint.")
     evaluate.add_argument("--config", type=Path, required=True, help="Path to a config YAML file.")
-    evaluate.add_argument("--checkpoint", type=Path, required=True, help="Path to .npz checkpoint.")
+    evaluate.add_argument(
+        "--checkpoint",
+        type=Path,
+        required=True,
+        help="Path to checkpoint (.pt for DQN/JEPA, .npz for linear_q).",
+    )
     evaluate.add_argument("--episodes", type=int, default=5, help="Number of evaluation episodes.")
     evaluate.add_argument("--headed", action="store_true", help="Show the browser window.")
     evaluate.set_defaults(func=_cmd_eval)

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import logging
 import re
 import time
 from collections import deque
 from contextlib import suppress
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -14,7 +17,11 @@ from PIL import Image
 
 from jepa_rl.browser.action_spaces import KeyboardAction
 from jepa_rl.envs.browser_game_env import BrowserGameEnv, Observation, StepResult
+from jepa_rl.envs.wrappers import apply_crop, apply_normalize
 from jepa_rl.utils.config import ProjectConfig
+from jepa_rl.utils.video import EpisodeRecorder
+
+logger = logging.getLogger(__name__)
 
 
 class BrowserEnvError(RuntimeError):
@@ -46,7 +53,14 @@ def resolve_game_url(url: str, *, cwd: Path | None = None) -> str:
 class PlaywrightBrowserGameEnv(BrowserGameEnv):
     """Playwright-backed browser-game environment for the first local smoke runs."""
 
-    def __init__(self, config: ProjectConfig, *, headless: bool | None = None):
+    def __init__(
+        self,
+        config: ProjectConfig,
+        *,
+        headless: bool | None = None,
+        run_dir: Path | None = None,
+        record_video: bool = False,
+    ):
         try:
             from playwright.sync_api import Error as PlaywrightError
             from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -62,6 +76,7 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         self._playwright_error = PlaywrightError
         self._playwright_timeout_error = PlaywrightTimeoutError
         self._headless = config.game.headless if headless is None else headless
+        self._run_dir = run_dir
         self._playwright: Any | None = None
         self._browser: Any | None = None
         self._context: Any | None = None
@@ -69,6 +84,10 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         self._frames: deque[np.ndarray] = deque(maxlen=config.observation.frame_stack)
         self._last_score = 0.0
         self._steps = 0
+        self._recorder: EpisodeRecorder | None = None
+        self._episode_index = 0
+        if record_video or config.recording.enabled:
+            self._recorder = EpisodeRecorder(fps=config.recording.fps)
 
     def __enter__(self) -> PlaywrightBrowserGameEnv:
         self.start()
@@ -81,7 +100,10 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         if self._page is not None:
             return
         self._playwright = self._sync_playwright().start()
-        launch_kwargs = {"headless": self._headless}
+        launch_kwargs = {
+            "headless": self._headless,
+            "args": ["--disable-extensions"],
+        }
         try:
             self._browser = self._playwright.chromium.launch(**launch_kwargs)
         except self._playwright_error as exc:
@@ -100,9 +122,29 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
             record_video_dir=None,
         )
         self._page = self._context.new_page()
+
+        if self._run_dir is not None and self.config.reward.privileged:
+            self._write_run_metadata(self._run_dir)
+
         self.reset()
 
+    def _write_run_metadata(self, run_dir: Path) -> None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        metadata = {
+            "privileged_score_reader": True,
+            "game": self.config.game.name,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        metadata_path = run_dir / "run_metadata.json"
+        metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
     def close(self) -> None:
+        # Save final episode recording before closing.
+        if self._recorder is not None and self._recorder.frame_count > 0:
+            save_dir = self._recording_save_dir()
+            self._recorder.save(save_dir)
+            self._recorder.reset()
+
         for resource in (self._context, self._browser):
             if resource is not None:
                 with suppress(self._playwright_error):
@@ -117,12 +159,30 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
 
     def reset(self) -> Observation:
         page = self._require_page()
-        page.goto(resolve_game_url(self.config.game.url), wait_until="load")
-        if self.config.reward.score_selector:
-            page.wait_for_selector(
-                self.config.reward.score_selector,
-                timeout=self.config.game.reset_timeout_sec * 1000,
+
+        # Auto-save previous episode recording before resetting.
+        if self._recorder is not None and self._recorder.frame_count > 0:
+            save_dir = self._recording_save_dir()
+            self._recorder.save(save_dir)
+            self._episode_index += 1
+            self._recorder.reset()
+
+        game_url = resolve_game_url(self.config.game.url)
+        try:
+            page.goto(game_url, wait_until="load")
+            if self.config.reward.score_selector:
+                page.wait_for_selector(
+                    self.config.reward.score_selector,
+                    timeout=self.config.game.reset_timeout_sec * 1000,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Reset failed for game URL %s (timeout=%.1fs): %s",
+                game_url,
+                self.config.game.reset_timeout_sec,
+                exc,
             )
+            raise
         self._focus_game()
         self._steps = 0
         self._last_score = self.read_score()
@@ -137,6 +197,10 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         self._apply_action(selected)
         self._steps += 1
         self._frames.append(self._capture_frame())
+
+        # Record full-resolution video frame if recording is active.
+        if self._recorder is not None:
+            self._recorder.add_frame(self.render_video_frame())
 
         score = self.read_score()
         reward = score - self._last_score
@@ -168,11 +232,17 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         selector = self.config.reward.score_selector
         if selector is None:
             raise BrowserEnvError("DOM score reader requires reward.score_selector.")
-        text = self._require_page().locator(selector).inner_text(timeout=1000)
-        match = re.search(r"-?\d+(?:\.\d+)?", text)
-        if match is None:
-            raise BrowserEnvError(f"Could not parse score from {selector!r}: {text!r}")
-        return float(match.group(0))
+        try:
+            text = self._require_page().locator(selector).inner_text(timeout=1000)
+            match = re.search(r"-?\d+(?:\.\d+)?", text)
+            if match is None:
+                raise BrowserEnvError(f"Could not parse score from {selector!r}: {text!r}")
+            return float(match.group(0))
+        except Exception as exc:
+            logger.warning("Score reading failed at step %d: %s", self._steps, exc)
+            if self._run_dir is not None:
+                self._save_score_failure_screenshot()
+            raise
 
     def is_done(self) -> bool:
         if self._steps >= self.config.game.max_steps_per_episode:
@@ -198,6 +268,30 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
             if "Target page, context or browser has been closed" in str(exc):
                 raise BrowserClosedError("browser window was closed") from exc
             raise
+
+    def save_recording(self, path: Path) -> Path | None:
+        if self._recorder is None or self._recorder.frame_count == 0:
+            return None
+        return self._recorder.save(path)
+
+    def _save_score_failure_screenshot(self) -> None:
+        if self._run_dir is None:
+            return
+        try:
+            failure_dir = self._run_dir / "score_failures"
+            failure_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
+            filename = f"step_{self._steps:06d}_{timestamp}.png"
+            path = failure_dir / filename
+            self._require_page().screenshot(path=str(path))
+            logger.warning("Score-failure screenshot saved to %s", path)
+        except Exception as screenshot_exc:
+            logger.warning("Failed to save score-failure screenshot: %s", screenshot_exc)
+
+    def _recording_save_dir(self) -> Path:
+        base = self.config.recording.dir
+        root = Path(base) if base else Path(self.config.experiment.output_dir) / "recordings"
+        return root / f"episode_{self._episode_index:06d}"
 
     def _require_page(self) -> Any:
         if self._page is None:
@@ -229,14 +323,36 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         image = Image.open(BytesIO(png))
         mode = "L" if self.config.observation.grayscale else "RGB"
         image = image.convert(mode)
+
+        # Crop before resize: convert to (C, H, W) array first.
+        array = np.asarray(image, dtype=np.uint8)
+        array = array[None, :, :] if self.config.observation.grayscale else array.transpose(2, 0, 1)
+
+        obs_cfg = self.config.observation
+        array = apply_crop(
+            array,
+            top=obs_cfg.crop_top,
+            bottom=obs_cfg.crop_bottom,
+            left=obs_cfg.crop_left,
+            right=obs_cfg.crop_right,
+        )
+
+        # Resize: convert back to PIL.
+        if array.shape[0] == 1:
+            image = Image.fromarray(array[0], mode="L")
+        else:
+            image = Image.fromarray(array.transpose(1, 2, 0), mode="RGB")
         image = image.resize(
             (self.config.observation.width, self.config.observation.height),
             Image.Resampling.BILINEAR,
         )
         array = np.asarray(image, dtype=np.uint8)
-        if self.config.observation.grayscale:
-            return array[None, :, :]
-        return array.transpose(2, 0, 1)
+        array = array[None, :, :] if self.config.observation.grayscale else array.transpose(2, 0, 1)
+
+        if self.config.observation.normalize:
+            array = apply_normalize(array)
+
+        return array
 
     def _observation_from_stack(self) -> Observation:
         data = np.concatenate(tuple(self._frames), axis=0)

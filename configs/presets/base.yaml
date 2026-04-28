@@ -9,7 +9,7 @@ observation:
 world_model:
   latent_dim: 768
   encoder:
-    type: vit
+    type: vit  # future placeholder; DQN+JEPA currently uses ConvEncoder regardless
     hidden_channels:
       - 64
       - 128

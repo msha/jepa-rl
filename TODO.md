@@ -168,13 +168,13 @@ References: design_doc §13 (Evaluation), Product Requirements §3.1.
   - `videos/`.
   - `replay/`.
   - `diagnostics/`.
-- [ ] P0 Implement scalar metrics logger.
-- [ ] P0 Implement JSONL event log for episode summaries.
-- [ ] P0 Implement checkpoint save and load.
-- [ ] P0 Save latest checkpoint.
-- [ ] P0 Save best checkpoint by deterministic mean evaluation score.
+- [x] P0 Implement scalar metrics logger.
+- [x] P0 Implement JSONL event log for episode summaries.
+- [x] P0 Implement checkpoint save and load.
+- [x] P0 Save latest checkpoint.
+- [x] P0 Save best checkpoint by deterministic mean evaluation score.
 - [ ] P1 Save top-k checkpoints.
-- [ ] P0 Save optimizer and scheduler state.
+- [x] P0 Save optimizer and scheduler state.
 - [ ] P0 Save replay cursor or replay metadata.
 - [ ] P1 Add TensorBoard or Weights & Biases adapter.
 - [ ] P1 Log browser diagnostics.
@@ -190,18 +190,18 @@ Definition of done:
 
 References: design_doc §8 (Reinforcement Learning Agent).
 
-- [ ] P0 Implement convolutional pixel encoder or reuse the world-model encoder without JEPA loss.
-- [ ] P0 Implement DQN Q-network.
-- [ ] P0 Implement dueling Q-network option.
-- [ ] P0 Implement target network with `target_update_interval`.
-- [ ] P0 Implement Double DQN target computation.
-- [ ] P0 Implement epsilon-greedy exploration.
-- [ ] P0 Implement configurable epsilon schedule.
-- [ ] P0 Implement n-step returns or leave a validated one-step fallback for the first baseline.
-- [ ] P0 Implement pixel DQN training loop.
-- [ ] P0 Implement training/evaluation alternation.
-- [ ] P0 Implement deterministic evaluation mode.
-- [ ] P0 Log episode return, score, TD error, loss, Q-value scale, action counts, and epsilon.
+- [x] P0 Implement convolutional pixel encoder or reuse the world-model encoder without JEPA loss.
+- [x] P0 Implement DQN Q-network.
+- [x] P0 Implement dueling Q-network option.
+- [x] P0 Implement target network with `target_update_interval`.
+- [x] P0 Implement Double DQN target computation.
+- [x] P0 Implement epsilon-greedy exploration.
+- [x] P0 Implement configurable epsilon schedule.
+- [x] P0 Implement n-step returns or leave a validated one-step fallback for the first baseline.
+- [x] P0 Implement pixel DQN training loop.
+- [x] P0 Implement training/evaluation alternation.
+- [x] P0 Implement deterministic evaluation mode.
+- [x] P0 Log episode return, score, TD error, loss, Q-value scale, action counts, and epsilon.
 - [x] P0 Add a temporary NumPy linear pixel-Q smoke trainer before full DQN lands.
 - [x] P0 Add `jepa-rl ml-smoke` to verify learner loss decreases on a controlled task.
 - [x] P0 Add replay minibatch updates and a target network to the temporary trainer.
@@ -218,26 +218,26 @@ Definition of done:
 
 References: design_doc §7 (JEPA World Model), §24 (Updated Architecture). Papers: ACT-JEPA, V-JEPA 2.
 
-- [ ] P0 Implement convolutional encoder.
+- [x] P0 Implement convolutional encoder.
 - [ ] P1 Implement Vision Transformer encoder option.
-- [ ] P0 Implement target encoder as EMA copy of online encoder.
-- [ ] P0 Implement EMA tau schedule (e.g., 0.996 → 0.9999).
-- [ ] P0 Implement stop-gradient on target branch.
-- [ ] P0 Implement action embedding for discrete actions.
-- [ ] P0 Implement transformer predictor.
+- [x] P0 Implement target encoder as EMA copy of online encoder.
+- [x] P0 Implement EMA tau schedule (e.g., 0.996 → 0.9999).
+- [x] P0 Implement stop-gradient on target branch.
+- [x] P0 Implement action embedding for discrete actions.
+- [x] P0 Implement transformer predictor.
 - [ ] P1 Implement GRU predictor option.
-- [ ] P0 Implement horizon embeddings.
-- [ ] P0 Implement multi-horizon prediction (e.g., `[1, 2, 4, 8]`).
+- [x] P0 Implement horizon embeddings.
+- [x] P0 Implement multi-horizon prediction (e.g., `[1, 2, 4, 8]`).
 - [ ] P0 Implement `action_chunk_size` (ACT-JEPA-style action chunking).
-- [ ] P0 Implement normalized latent prediction loss (cosine + MSE on normalized embeddings).
-- [ ] P0 Implement variance regularization (`lambda_var`).
-- [ ] P0 Implement covariance regularization (`lambda_cov`).
-- [ ] P0 Implement latent normalization option.
-- [ ] P0 Implement collapse metrics (variance floor, rank, dimension utilization).
-- [ ] P0 Implement JEPA shape tests (RGB, grayscale, frame stacks 1/4/8, multiple horizons).
-- [ ] P0 Implement offline JEPA pretraining loop.
-- [ ] P0 Log prediction loss by horizon.
-- [ ] P0 Log latent variance and covariance.
+- [x] P0 Implement normalized latent prediction loss (cosine + MSE on normalized embeddings).
+- [x] P0 Implement variance regularization (`lambda_var`).
+- [x] P0 Implement covariance regularization (`lambda_cov`).
+- [x] P0 Implement latent normalization option.
+- [x] P0 Implement collapse metrics (variance floor, rank, dimension utilization).
+- [x] P0 Implement JEPA shape tests (RGB, grayscale, frame stacks 1/4/8, multiple horizons).
+- [x] P0 Implement offline JEPA pretraining loop.
+- [x] P0 Log prediction loss by horizon.
+- [x] P0 Log latent variance and covariance.
 - [ ] P1 Log action-sequence prediction diagnostics (accuracy on next-action prediction from latents).
 - [ ] P1 Add image augmentations that preserve gameplay semantics.
 - [ ] P2 Add passive video pretraining without action labels (see Phase 13).
@@ -348,13 +348,13 @@ Definition of done:
 - [ ] P0 Test frame stack shape and reset behavior.
 - [ ] P0 Test score readers with saved HTML snippets and screenshots.
 - [x] P0 Test replay insertion, eviction, transition sampling, and sequence sampling.
-- [ ] P0 Test DQN target shape and loss computation.
-- [ ] P0 Test JEPA encoder and predictor shapes.
-- [ ] P0 Test EMA target update.
-- [ ] P0 Test checkpoint save/load round trip.
+- [x] P0 Test DQN target shape and loss computation.
+- [x] P0 Test JEPA encoder and predictor shapes.
+- [x] P0 Test EMA target update.
+- [x] P0 Test checkpoint save/load round trip.
 - [ ] P1 Add browser integration smoke test behind an opt-in marker.
-- [ ] P1 Add short CPU training smoke test with a fake environment.
-- [ ] P1 Add deterministic seed test for fake environment training.
+- [x] P1 Add short CPU training smoke test with a fake environment.
+- [x] P1 Add deterministic seed test for fake environment training.
 - [ ] P1 Add regression tests for score-reader failure handling.
 - [ ] P2 Add performance tests for replay sampling throughput.
 

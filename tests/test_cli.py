@@ -11,7 +11,6 @@ def test_cli_help_exits_zero(capsys) -> None:
     assert "JEPA-RL browser-game research CLI" in captured.out
     assert "open-game" in captured.out
     assert "ml-smoke" in captured.out
-    assert "dashboard" in captured.out
     assert "ui" in captured.out
 
 

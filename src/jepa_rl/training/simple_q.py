@@ -9,6 +9,7 @@ from threading import Event
 from typing import Any
 
 import numpy as np
+from PIL import Image
 
 from jepa_rl.browser.playwright_env import PlaywrightBrowserGameEnv
 from jepa_rl.envs.browser_game_env import Observation
@@ -161,6 +162,7 @@ def train_linear_q(
     batch_size: int | None = None,
     dashboard_every: int = 25,
     stop_event: Event | None = None,
+    screenshot_path: Path | None = None,
 ) -> TrainSummary:
     if steps <= 0:
         raise ValueError("steps must be positive")
@@ -185,7 +187,9 @@ def train_linear_q(
     effective_batch_size = batch_size or min(config.agent.batch_size, 64)
     replay = LinearReplay(capacity=config.replay.capacity)
 
-    with PlaywrightBrowserGameEnv(config, headless=headless) as env:
+    with PlaywrightBrowserGameEnv(
+        config, headless=headless, run_dir=run_dir, record_video=config.recording.enabled
+    ) as env:
         obs = env.reset()
         model = LinearQModel(
             feature_dim=featurize_observation(obs).shape[0],
@@ -315,6 +319,12 @@ def train_linear_q(
                         started_at=started_at,
                     )
                     write_training_dashboard(run_dir)
+                if screenshot_path is not None and (step + 1) % max(1, dashboard_every or 5) == 0:
+                    try:
+                        frame = env.render_video_frame()
+                        Image.fromarray(frame).save(screenshot_path)
+                    except Exception:  # noqa: BLE001
+                        pass
 
         if episode_score or episode_return:
             best_score = max(best_score, episode_score)
@@ -374,6 +384,7 @@ def evaluate_linear_q(
     checkpoint: Path,
     episodes: int,
     headless: bool | None = None,
+    run_dir: Path | None = None,
 ) -> dict[str, Any]:
     if episodes <= 0:
         raise ValueError("episodes must be positive")
@@ -381,7 +392,9 @@ def evaluate_linear_q(
     model = LinearQModel.load(checkpoint)
     scores: list[float] = []
     returns: list[float] = []
-    with PlaywrightBrowserGameEnv(config, headless=headless) as env:
+    with PlaywrightBrowserGameEnv(
+        config, headless=headless, run_dir=run_dir, record_video=config.recording.enabled
+    ) as env:
         for _ in range(episodes):
             obs = env.reset()
             episode_return = 0.0

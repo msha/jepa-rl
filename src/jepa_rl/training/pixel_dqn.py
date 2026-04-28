@@ -90,6 +90,7 @@ def train_dqn(
     stop_event: Event | None = None,
     env_factory: Callable[[ProjectConfig, bool | None], BrowserGameEnv] | None = None,
     resume_checkpoint: Path | None = None,
+    screenshot_path: Path | None = None,
 ) -> DqnTrainSummary:
     if steps <= 0:
         raise ValueError("steps must be positive")
@@ -102,7 +103,9 @@ def train_dqn(
         from jepa_rl.browser.playwright_env import PlaywrightBrowserGameEnv
 
         def env_factory(cfg: ProjectConfig, hd: bool | None) -> BrowserGameEnv:
-            return PlaywrightBrowserGameEnv(cfg, headless=hd)
+            return PlaywrightBrowserGameEnv(
+                cfg, headless=hd, run_dir=run_dir, record_video=config.recording.enabled
+            )
 
     device = resolve_torch_device(config.experiment.device)
     if config.experiment.precision != "fp32" and device.type == "mps":
@@ -142,7 +145,9 @@ def train_dqn(
             stacklevel=2,
         )
 
-    effective_learning_starts = learning_starts if learning_starts is not None else config.agent.learning_starts
+    effective_learning_starts = (
+        learning_starts if learning_starts is not None else config.agent.learning_starts
+    )
     effective_batch_size = batch_size if batch_size is not None else config.agent.batch_size
     checkpoint_every = config.training.checkpoint_interval_steps
 
@@ -174,7 +179,8 @@ def train_dqn(
     initial_conv_weight = online_net.encoder.backbone[0].weight.detach().clone().cpu()
 
     def _weight_delta() -> float:
-        return (online_net.encoder.backbone[0].weight.detach().cpu() - initial_conv_weight).norm().item()
+        diff = online_net.encoder.backbone[0].weight.detach().cpu() - initial_conv_weight
+        return diff.norm().item()
 
     losses: list[float] = []
     td_errors: list[float] = []
@@ -305,6 +311,8 @@ def train_dqn(
                 )
 
                 obs = result.observation
+                if screenshot_path is not None:
+                    _save_obs_frame(obs.data, screenshot_path)
                 if result.done:
                     if episode_score > best_score:
                         best_score = episode_score
@@ -451,6 +459,7 @@ def evaluate_dqn(
     episodes: int,
     headless: bool | None = None,
     env_factory: Callable[[ProjectConfig, bool | None], BrowserGameEnv] | None = None,
+    run_dir: Path | None = None,
 ) -> dict[str, Any]:
     if episodes <= 0:
         raise ValueError("episodes must be positive")
@@ -459,7 +468,9 @@ def evaluate_dqn(
         from jepa_rl.browser.playwright_env import PlaywrightBrowserGameEnv
 
         def env_factory(cfg: ProjectConfig, hd: bool | None) -> BrowserGameEnv:
-            return PlaywrightBrowserGameEnv(cfg, headless=hd)
+            return PlaywrightBrowserGameEnv(
+                cfg, headless=hd, run_dir=run_dir, record_video=config.recording.enabled
+            )
 
     device = resolve_torch_device(config.experiment.device)
     online_net = build_q_network(config, num_actions=config.actions.num_actions).to(device)
@@ -497,6 +508,27 @@ def evaluate_dqn(
         "median_score": float(np.median(scores)),
         "p95_score": float(np.percentile(scores, 95)),
     }
+
+
+def _save_obs_frame(data: np.ndarray, path: Path) -> None:
+    try:
+        from PIL import Image as PILImage
+
+        arr = data
+        if arr.ndim == 3:
+            ch = arr.shape[2]
+            if ch <= 2:
+                frame: np.ndarray = arr[:, :, ch - 1]
+            elif ch == 3:
+                frame = arr
+            else:
+                frame = arr[:, :, -3:]
+        else:
+            frame = arr
+        mode = "L" if frame.ndim == 2 else "RGB"
+        PILImage.fromarray(frame.astype(np.uint8), mode).save(path)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _save_ckpt(

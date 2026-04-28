@@ -54,6 +54,6 @@ def test_write_training_dashboard_creates_self_contained_html(tmp_path) -> None:
     dashboard = write_training_dashboard(run_dir)
 
     html = dashboard.read_text(encoding="utf-8")
-    assert "Training Dashboard: run" in html
-    assert "Best Score" in html
-    assert "train_summary.json" in html
+    assert "jepa-rl" in html
+    assert "best score" in html.lower()
+    assert "static snapshot" in html

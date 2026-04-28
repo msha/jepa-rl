@@ -1,0 +1,53 @@
+extends:
+  - ../../../configs/presets/tiny.yaml
+
+experiment:
+  device: cpu
+  precision: fp32
+
+game:
+  url: "about:blank"
+  max_steps_per_episode: 32
+
+observation:
+  width: 32
+  height: 32
+  grayscale: true
+  frame_stack: 1
+
+actions:
+  keys:
+    - noop
+    - a
+    - b
+    - c
+
+agent:
+  algorithm: dqn
+  batch_size: 8
+
+world_model:
+  latent_dim: 32
+  encoder:
+    hidden_channels:
+      - 8
+      - 16
+  predictor:
+    hidden_dim: 32
+    depth: 1
+    num_heads: 2
+    horizons:
+      - 1
+      - 2
+    action_embed_dim: 8
+  loss:
+    lambda_var: 1.0
+    lambda_cov: 0.04
+    variance_floor: 1.0
+
+replay:
+  capacity: 2000
+  prioritized: false
+
+training:
+  checkpoint_interval_steps: 1000

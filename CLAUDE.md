@@ -34,8 +34,7 @@ Implemented now:
 - `jepa-rl init-run`.
 - `jepa-rl open-game` to launch the configured game in visible Chromium.
 - `jepa-rl ml-smoke` to verify the current linear Q learner reduces synthetic loss.
-- `jepa-rl dashboard --run ...` to generate/open the run dashboard HTML.
-- `jepa-rl ui --config ...` to run the live local control panel.
+- `jepa-rl ui` to run the live training dashboard and control panel (accepts `--config`, `--run`, or auto-discovers `configs/base.yaml` with no args).
 - `jepa-rl collect-random` for the local Breakout smoke game.
 - `jepa-rl train` for the current NumPy linear pixel-Q smoke model.
 - `jepa-rl eval` for the current `.npz` smoke-model checkpoints.
@@ -146,6 +145,27 @@ resolves to MPS via `models/device.py::resolve_torch_device`. Notes:
     CPU CI.
   - `torch.use_deterministic_algorithms(True)` is not honored on MPS; smoke tests
     use statistical margins (`mean + 3*std`), not bit-exact equality.
+
+## UI and CLI Feature Parity
+
+Every training and evaluation feature must be accessible from both the CLI and the `jepa-rl ui` web interface. When adding a new capability:
+
+1. **Wire it in `src/jepa_rl/cli.py`** as a subcommand or flag.
+2. **Wire it in `src/jepa_rl/ui/server.py`** — expose it through the existing `/api/train/start`, `/api/eval`, or a new POST endpoint. Display its result in the dashboard HTML.
+3. The UI dispatches training and evaluation based on `config.agent.algorithm`, exactly like the CLI. Adding a new algorithm requires updating both `_training_worker` and `_handle_eval` in `server.py`.
+
+Current UI capabilities (must stay in sync with CLI):
+
+| Feature | CLI | UI |
+|---|---|---|
+| Start DQN or linear_q training | `jepa-rl train` | Start button, dispatches on `agent.algorithm` |
+| Stop training | Ctrl-C | Stop button (signals `stop_event`) |
+| Evaluate latest checkpoint | `jepa-rl eval` | Eval button, dispatches on `agent.algorithm`, reads `.pt` or `.npz` |
+| View live metrics | dashboard.html | Real-time charts: score, loss, epsilon, td-error |
+| View config | `validate-config` | Config panel (toggle) |
+| Browse runs | `ls runs/` | Run selector dropdown |
+| Switch config | `--config` flag | Config selector dropdown |
+| Play game manually | `open-game` | Embedded iframe with ◀ serve ▶ reset controls |
 
 ## Recommended Stack (Phase 0 pinned, more arrives per phase)
 

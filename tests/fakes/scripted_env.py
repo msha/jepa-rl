@@ -88,8 +88,5 @@ class ScriptedEnv(BrowserGameEnv):
 
     def render_video_frame(self) -> Any:
         data = self._make_obs_data()
-        if self.channels == 1:
-            rgb = np.repeat(data[0:1], 3, axis=0)
-        else:
-            rgb = data[:3]
+        rgb = np.repeat(data[0:1], 3, axis=0) if self.channels == 1 else data[:3]
         return np.transpose(rgb, (1, 2, 0))

@@ -23,8 +23,11 @@ observation:
   height: 120
   grayscale: false
   frame_stack: 4
-  crop: null
-  normalize: true
+  crop_top: 0
+  crop_bottom: 0
+  crop_left: 0
+  crop_right: 0
+  normalize: false
 
 actions:
   type: discrete_keyboard
@@ -149,3 +152,8 @@ evaluation:
   deterministic: true
   record_video: true
   save_best_by: mean_score
+
+recording:
+  enabled: false
+  fps: 30
+  dir: ""

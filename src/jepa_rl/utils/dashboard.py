@@ -57,139 +57,193 @@ def _render_dashboard_html(
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>JEPA-RL Training Dashboard - {run_name}</title>
+    <title>jepa-rl — {run_name}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
       :root {{
         color-scheme: dark;
-        --bg: #0f1117;
-        --panel: #181c25;
-        --panel-2: #202634;
-        --text: #f4f7fb;
-        --muted: #a8b2c5;
-        --line: #31394b;
-        --green: #34d399;
-        --blue: #60a5fa;
-        --yellow: #fbbf24;
-        --red: #fb7185;
+        --bg: #0f0e0c;
+        --surface: #171613;
+        --surface-2: #1e1d19;
+        --border: #2a2822;
+        --text: #ddd8cf;
+        --muted: #7d7870;
+        --accent: #c49152;
+        --green: #5d9e5d;
+        --red: #b9524c;
+        --blue: #4e89ba;
+        --yellow: #bfa03e;
       }}
-
-      * {{ box-sizing: border-box; }}
+      * {{ box-sizing: border-box; margin: 0; padding: 0; }}
       body {{
-        margin: 0;
         background: var(--bg);
         color: var(--text);
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: 'Outfit', system-ui, sans-serif;
+        font-size: 14px;
+        line-height: 1.5;
       }}
-
       header {{
-        padding: 22px 28px;
-        border-bottom: 1px solid var(--line);
-        background: #121722;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 14px 24px;
+        border-bottom: 1px solid var(--border);
       }}
-
-      h1 {{
-        margin: 0 0 6px;
-        font-size: 22px;
-        line-height: 1.2;
-      }}
-
-      .subtle {{
-        color: var(--muted);
-        font-size: 13px;
-      }}
-
-      main {{
-        display: grid;
-        gap: 18px;
-        padding: 20px 28px 28px;
-      }}
-
-      .cards {{
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 12px;
-      }}
-
-      .card, .panel {{
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-      }}
-
-      .card {{
-        padding: 14px;
-        min-height: 82px;
-      }}
-
-      .label {{
-        color: var(--muted);
+      .brand {{
         font-size: 12px;
-        margin-bottom: 8px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--accent);
       }}
-
-      .value {{
-        font-variant-numeric: tabular-nums;
-        font-size: 24px;
-        font-weight: 750;
+      .sep {{
+        width: 1px;
+        height: 16px;
+        background: var(--border);
       }}
-
-      .grid {{
+      .run-name {{
+        font-size: 14px;
+        font-weight: 500;
+      }}
+      .badge {{
+        margin-left: 8px;
+        font-size: 10px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        padding: 2px 8px;
+      }}
+      main {{
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 20px 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }}
+      .metrics {{
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-        gap: 18px;
+        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+        gap: 1px;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        overflow: hidden;
       }}
-
-      .panel {{
-        min-height: 260px;
-        padding: 14px;
+      .metric {{
+        background: var(--surface);
+        padding: 10px 12px;
       }}
-
-      .panel h2 {{
-        margin: 0 0 12px;
-        font-size: 15px;
+      .m-label {{
+        font-size: 10px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
       }}
-
+      .m-val {{
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 16px;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+        margin-top: 2px;
+      }}
+      .charts {{
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 16px;
+      }}
+      .chart-panel {{
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        overflow: hidden;
+      }}
+      .section-label {{
+        font-size: 10px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        padding: 10px 12px 0;
+      }}
       canvas {{
-        width: 100%;
-        height: 210px;
         display: block;
-        background: var(--panel-2);
-        border-radius: 6px;
+        width: 100%;
+        height: 180px;
       }}
-
+      .episodes-section {{
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        overflow: hidden;
+      }}
+      .episodes-section .section-label {{
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }}
       table {{
         width: 100%;
         border-collapse: collapse;
-        font-size: 13px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 12px;
       }}
-
       th, td {{
-        padding: 8px 6px;
-        border-bottom: 1px solid var(--line);
+        padding: 7px 12px;
         text-align: right;
-        font-variant-numeric: tabular-nums;
+        border-bottom: 1px solid var(--border);
       }}
-
       th:first-child, td:first-child {{ text-align: left; }}
+      th {{
+        background: var(--surface);
+        font-family: 'Outfit', sans-serif;
+        font-weight: 500;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }}
+      @media (max-width: 860px) {{
+        .charts {{ grid-template-columns: 1fr; }}
+      }}
     </style>
   </head>
   <body>
     <header>
-      <h1>Training Dashboard: {run_name}</h1>
-      <div class="subtle">Self-contained snapshot generated from metrics/train_events.jsonl and metrics/train_summary.json.</div>
+      <span class="brand">jepa-rl</span>
+      <span class="sep"></span>
+      <span class="run-name">{run_name}</span>
+      <span class="badge">static snapshot</span>
     </header>
     <main>
-      <section class="cards" id="cards"></section>
-      <section class="grid">
-        <div class="panel"><h2>Score</h2><canvas id="scoreChart"></canvas></div>
-        <div class="panel"><h2>Loss</h2><canvas id="lossChart"></canvas></div>
-        <div class="panel"><h2>Epsilon</h2><canvas id="epsilonChart"></canvas></div>
-        <div class="panel"><h2>TD Error</h2><canvas id="tdChart"></canvas></div>
+      <div class="metrics" id="metrics"></div>
+      <section class="charts">
+        <div class="chart-panel">
+          <div class="section-label">score</div>
+          <canvas id="scoreChart"></canvas>
+        </div>
+        <div class="chart-panel">
+          <div class="section-label">loss</div>
+          <canvas id="lossChart"></canvas>
+        </div>
+        <div class="chart-panel">
+          <div class="section-label">epsilon</div>
+          <canvas id="epsilonChart"></canvas>
+        </div>
+        <div class="chart-panel">
+          <div class="section-label">td error</div>
+          <canvas id="tdChart"></canvas>
+        </div>
       </section>
-      <section class="panel">
-        <h2>Episodes</h2>
+      <section class="episodes-section">
+        <div class="section-label">episodes</div>
         <table>
-          <thead><tr><th>Episode</th><th>Step</th><th>Return</th><th>Score</th></tr></thead>
+          <thead><tr><th>ep</th><th>step</th><th>return</th><th>score</th></tr></thead>
           <tbody id="episodes"></tbody>
         </table>
       </section>
@@ -200,101 +254,119 @@ def _render_dashboard_html(
       const steps = payload.stepEvents || [];
       const episodes = payload.episodeEvents || [];
 
-      const cards = [
-        ["Steps", summary.steps],
-        ["Episodes", summary.episodes],
-        ["Best Score", summary.best_score],
-        ["Mean Loss", summary.mean_loss],
-        ["Mean TD Error", summary.mean_td_error],
-        ["Updates", summary.update_count],
-        ["Replay Size", summary.replay_size],
-        ["Weight Delta", summary.weight_delta_norm],
+      const items = [
+        ["steps", summary.steps],
+        ["episodes", summary.episodes],
+        ["best score", summary.best_score],
+        ["mean loss", summary.mean_loss],
+        ["mean td error", summary.mean_td_error],
+        ["updates", summary.update_count],
+        ["replay size", summary.replay_size],
+        ["weight delta", summary.weight_delta_norm],
       ];
 
-      document.getElementById("cards").innerHTML = cards.map(([label, value]) => `
-        <div class="card">
-          <div class="label">${{label}}</div>
-          <div class="value">${{formatValue(value)}}</div>
-        </div>
-      `).join("");
+      document.getElementById("metrics").innerHTML = items.map(([label, value]) =>
+        '<div class="metric"><div class="m-label">' + label + '</div><div class="m-val">' + fmt(value) + '</div></div>'
+      ).join("");
 
-      document.getElementById("episodes").innerHTML = episodes.slice(-30).reverse().map((event) => `
-        <tr>
-          <td>${{event.episode ?? ""}}</td>
-          <td>${{event.step ?? ""}}</td>
-          <td>${{formatValue(event.return)}}</td>
-          <td>${{formatValue(event.score)}}</td>
-        </tr>
-      `).join("");
+      document.getElementById("episodes").innerHTML = episodes.slice(-30).reverse().map((e) =>
+        "<tr><td>" + (e.episode ?? "") + "</td><td>" + (e.step ?? "") + "</td><td>" + fmt(e.return) + "</td><td>" + fmt(e.score) + "</td></tr>"
+      ).join("");
 
-      drawChart("scoreChart", steps.map(e => [e.step, e.score]), "#34d399");
-      drawChart("lossChart", steps.filter(e => e.loss !== null).map(e => [e.step, e.loss]), "#60a5fa");
-      drawChart("epsilonChart", steps.map(e => [e.step, e.epsilon]), "#fbbf24");
-      drawChart("tdChart", steps.filter(e => e.td_error !== null).map(e => [e.step, e.td_error]), "#fb7185");
+      drawChart("scoreChart", steps.map(e => [e.step, e.score]), "#5d9e5d");
+      drawChart("lossChart", steps.filter(e => e.loss !== null).map(e => [e.step, e.loss]), "#4e89ba");
+      drawChart("epsilonChart", steps.map(e => [e.step, e.epsilon]), "#bfa03e");
+      drawChart("tdChart", steps.filter(e => e.td_error !== null).map(e => [e.step, e.td_error]), "#b9524c");
 
-      function formatValue(value) {{
-        if (value === null || value === undefined || Number.isNaN(value)) return "-";
-        if (typeof value === "number") {{
-          if (Math.abs(value) >= 1000) return value.toFixed(0);
-          if (Math.abs(value) >= 10) return value.toFixed(2);
-          return value.toFixed(4).replace(/0+$/, "").replace(/\\.$/, "");
+      function fmt(v) {{
+        if (v === null || v === undefined || Number.isNaN(v)) return "\\u2014";
+        if (typeof v === "number") {{
+          if (Math.abs(v) >= 1000) return v.toFixed(0);
+          if (Math.abs(v) >= 10) return v.toFixed(2);
+          return v.toFixed(4).replace(/0+$/, "").replace(/\\.$/, "");
         }}
-        return String(value);
+        return String(v);
+      }}
+
+      function hexRgba(hex, a) {{
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        return "rgba(" + r + "," + g + "," + b + "," + a + ")";
       }}
 
       function drawChart(id, points, color) {{
         const canvas = document.getElementById(id);
         const rect = canvas.getBoundingClientRect();
-        const ratio = window.devicePixelRatio || 1;
-        canvas.width = Math.max(1, Math.floor(rect.width * ratio));
-        canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+        canvas.height = Math.max(1, Math.floor(rect.height * dpr));
         const ctx = canvas.getContext("2d");
-        ctx.scale(ratio, ratio);
+        ctx.scale(dpr, dpr);
         const w = rect.width;
         const h = rect.height;
         ctx.clearRect(0, 0, w, h);
-        ctx.strokeStyle = "#31394b";
-        ctx.lineWidth = 1;
-        for (let i = 0; i < 4; i += 1) {{
-          const y = 12 + i * (h - 24) / 3;
+
+        ctx.strokeStyle = "#2a2822";
+        ctx.lineWidth = 0.5;
+        ctx.setLineDash([2, 4]);
+        for (let i = 1; i <= 3; i++) {{
+          const y = (i / 4) * h;
           ctx.beginPath();
-          ctx.moveTo(12, y);
-          ctx.lineTo(w - 12, y);
+          ctx.moveTo(0, y);
+          ctx.lineTo(w, y);
           ctx.stroke();
         }}
+        ctx.setLineDash([]);
+
         if (!points.length) {{
-          ctx.fillStyle = "#a8b2c5";
-          ctx.font = "13px system-ui";
-          ctx.fillText("No data yet", 14, 26);
+          ctx.fillStyle = "#7d7870";
+          ctx.font = "12px 'IBM Plex Mono', monospace";
+          ctx.fillText("no data", 12, h / 2 + 4);
           return;
         }}
+
         const xs = points.map(p => p[0]);
-        const ys = points.map(p => p[1]).filter(v => Number.isFinite(v));
-        const minX = Math.min(...xs);
-        const maxX = Math.max(...xs);
+        const ys = points.map(p => p[1]).filter(Number.isFinite);
         let minY = Math.min(...ys);
         let maxY = Math.max(...ys);
-        if (!Number.isFinite(minY) || !Number.isFinite(maxY)) return;
-        if (Math.abs(maxY - minY) < 1e-9) {{
-          minY -= 1;
-          maxY += 1;
-        }}
-        const px = (x) => 12 + ((x - minX) / Math.max(1, maxX - minX)) * (w - 24);
-        const py = (y) => h - 12 - ((y - minY) / (maxY - minY)) * (h - 24);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
+        if (!Number.isFinite(minY)) return;
+        if (maxY - minY < 1e-9) {{ minY -= 1; maxY += 1; }}
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+
+        const px = (x) => ((x - minX) / Math.max(1, maxX - minX)) * w;
+        const py = (y) => h - ((y - minY) / (maxY - minY)) * h;
+
         ctx.beginPath();
-        points.forEach(([x, y], index) => {{
-          const xx = px(x);
-          const yy = py(y);
-          if (index === 0) ctx.moveTo(xx, yy);
-          else ctx.lineTo(xx, yy);
+        points.forEach(([x, y], i) => {{
+          if (i === 0) ctx.moveTo(px(x), py(y));
+          else ctx.lineTo(px(x), py(y));
+        }});
+        ctx.lineTo(px(xs[xs.length - 1]), h);
+        ctx.lineTo(px(xs[0]), h);
+        ctx.closePath();
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, hexRgba(color, 0.09));
+        grad.addColorStop(1, hexRgba(color, 0.02));
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        points.forEach(([x, y], i) => {{
+          if (i === 0) ctx.moveTo(px(x), py(y));
+          else ctx.lineTo(px(x), py(y));
         }});
         ctx.stroke();
-        ctx.fillStyle = "#a8b2c5";
-        ctx.font = "12px system-ui";
-        ctx.fillText(formatValue(maxY), 14, 18);
-        ctx.fillText(formatValue(minY), 14, h - 14);
+
+        ctx.fillStyle = "#7d7870";
+        ctx.font = "10px 'IBM Plex Mono', monospace";
+        ctx.textAlign = "left";
+        ctx.fillText(fmt(maxY), 4, 10);
+        ctx.fillText(fmt(minY), 4, h - 4);
       }}
     </script>
   </body>
