@@ -91,6 +91,7 @@ References: design_doc §6 (Environment Interface), §15 (Browser Automation).
   - `is_done()`.
   - `render_video_frame()`.
 - [x] P0 Implement Playwright Chromium runner.
+- [x] P0 Add `jepa-rl open-game` for visible browser launch.
 - [x] P0 Use isolated browser contexts and dedicated browser profiles.
 - [x] P0 Set fixed viewport from config.
 - [x] P0 Implement screenshot observation mode.
@@ -202,6 +203,8 @@ References: design_doc §8 (Reinforcement Learning Agent).
 - [ ] P0 Implement deterministic evaluation mode.
 - [ ] P0 Log episode return, score, TD error, loss, Q-value scale, action counts, and epsilon.
 - [x] P0 Add a temporary NumPy linear pixel-Q smoke trainer before full DQN lands.
+- [x] P0 Add `jepa-rl ml-smoke` to verify learner loss decreases on a controlled task.
+- [x] P0 Add replay minibatch updates and a target network to the temporary trainer.
 - [ ] P1 Implement prioritized replay integration.
 - [ ] P1 Implement reward clipping option.
 - [ ] P1 Add distributional DQN head as optional extension.
@@ -310,6 +313,8 @@ References: design_doc §13 (Evaluation), §24.6 (Updated Evaluation Metrics).
 - [ ] P2 Report candidate action sequence success rate (Phase 17).
 - [ ] P2 Report value-prediction calibration (Phase 17).
 - [ ] P2 Add HTML or Markdown experiment report generation.
+- [x] P2 Add a lightweight static HTML training dashboard for smoke runs.
+- [x] P2 Add a local live training UI with embedded game and Start/Stop/Eval controls.
 
 Definition of done:
 

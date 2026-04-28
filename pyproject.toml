@@ -26,6 +26,7 @@ dependencies = [
   "numpy>=1.26",
   "pillow>=10",
   "playwright>=1.45",
+  "torch>=2.11.0",
 ]
 
 [project.optional-dependencies]

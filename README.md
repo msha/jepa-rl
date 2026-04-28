@@ -12,6 +12,10 @@ Implemented CLI commands:
 
 - `jepa-rl validate-config --config configs/games/breakout.yaml`
 - `jepa-rl init-run --config configs/games/breakout.yaml --experiment <name>`
+- `jepa-rl open-game --config configs/games/breakout.yaml`
+- `jepa-rl ml-smoke`
+- `jepa-rl dashboard --run runs/<experiment>`
+- `jepa-rl ui --config configs/games/breakout.yaml`
 - `jepa-rl collect-random --config configs/games/breakout.yaml --experiment <name>`
 - `jepa-rl train --config configs/games/breakout.yaml --experiment <name>`
 - `jepa-rl eval --config configs/games/breakout.yaml --checkpoint <path>`
@@ -50,12 +54,17 @@ uv run playwright install chromium
 Run the local browser game and train the current smoke model:
 
 ```bash
+uv run jepa-rl ml-smoke
+uv run jepa-rl open-game --config configs/games/breakout.yaml --seconds 10
+uv run jepa-rl open-game --config configs/games/breakout.yaml --seconds 10 --random-steps 5
+uv run jepa-rl ui --config configs/games/breakout.yaml
 uv run jepa-rl collect-random --config configs/games/breakout.yaml --experiment smoke_random --episodes 1 --max-steps 25
 uv run jepa-rl train --config configs/games/breakout.yaml --experiment smoke_train --steps 200 --learning-starts 0
+uv run jepa-rl dashboard --run runs/smoke_train --open
 uv run jepa-rl eval --config configs/games/breakout.yaml --checkpoint runs/smoke_train/checkpoints/latest.npz --episodes 3
 ```
 
-Add `--headed` to `collect-random`, `train`, or `eval` to watch Chromium play the local game. `uv.lock` is committed; CI installs from it with `uv sync --frozen`.
+`open-game` always opens visible Chromium. Add `--hold` to keep it open until Ctrl+C, or close the browser window directly; both paths exit cleanly. `ui` opens a local control panel with the game embedded, Start/Stop/Eval buttons, and live charts for score, loss, epsilon, TD error, replay size, updates, and progress. Add `--headed` to `collect-random`, `train`, or `eval` to watch Chromium play during those commands. `ml-smoke` is a fast numeric check that the current linear Q learner reduces loss and changes weights before involving the browser. `train` writes `runs/<experiment>/dashboard.html`, and `dashboard --open` regenerates and opens that static UI panel. `uv.lock` is committed; CI installs from it with `uv sync --frozen`.
 
 ## Project Goals
 

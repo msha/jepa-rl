@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import time
 from collections import deque
+from contextlib import suppress
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,10 @@ from jepa_rl.utils.config import ProjectConfig
 
 class BrowserEnvError(RuntimeError):
     """Raised when the Playwright browser environment cannot run."""
+
+
+class BrowserClosedError(BrowserEnvError):
+    """Raised when the user closes the visible browser window."""
 
 
 def resolve_game_url(url: str, *, cwd: Path | None = None) -> str:
@@ -100,9 +105,11 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
     def close(self) -> None:
         for resource in (self._context, self._browser):
             if resource is not None:
-                resource.close()
+                with suppress(self._playwright_error):
+                    resource.close()
         if self._playwright is not None:
-            self._playwright.stop()
+            with suppress(self._playwright_error):
+                self._playwright.stop()
         self._page = None
         self._context = None
         self._browser = None
@@ -178,6 +185,19 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
     def render_video_frame(self) -> np.ndarray:
         image = Image.open(BytesIO(self._require_page().screenshot())).convert("RGB")
         return np.asarray(image, dtype=np.uint8)
+
+    def wait(self, seconds: float) -> None:
+        if seconds < 0:
+            raise BrowserEnvError("wait seconds cannot be negative")
+        page = self._require_page()
+        if page.is_closed():
+            raise BrowserClosedError("browser window was closed")
+        try:
+            page.wait_for_timeout(int(seconds * 1000))
+        except self._playwright_error as exc:
+            if "Target page, context or browser has been closed" in str(exc):
+                raise BrowserClosedError("browser window was closed") from exc
+            raise
 
     def _require_page(self) -> Any:
         if self._page is None:

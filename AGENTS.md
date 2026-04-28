@@ -32,6 +32,10 @@ Implemented now:
 - uv-managed environment: `uv sync` creates `.venv` and installs from `uv.lock`. Dev tooling (pytest, ruff) is declared in `[dependency-groups].dev`; runtime extras stay under `[project.optional-dependencies]` (`config`, `browser`, `train`, `all`).
 - `jepa-rl validate-config`.
 - `jepa-rl init-run`.
+- `jepa-rl open-game` to launch the configured game in visible Chromium.
+- `jepa-rl ml-smoke` to verify the current linear Q learner reduces synthetic loss.
+- `jepa-rl dashboard --run ...` to generate/open the run dashboard HTML.
+- `jepa-rl ui --config ...` to run the live local control panel.
 - `jepa-rl collect-random` for the local Breakout smoke game.
 - `jepa-rl train` for the current NumPy linear pixel-Q smoke model.
 - `jepa-rl eval` for the current `.npz` smoke-model checkpoints.

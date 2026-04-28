@@ -178,6 +178,7 @@ dependencies = [
     { name = "pillow" },
     { name = "playwright" },
     { name = "pyyaml" },
+    { name = "torch" },
 ]
 
 [package.optional-dependencies]
@@ -220,6 +221,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'all'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'config'", specifier = ">=6.0" },
+    { name = "torch", specifier = ">=2.11.0" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.3" },
     { name = "torch", marker = "extra == 'train'", specifier = ">=2.3" },
 ]

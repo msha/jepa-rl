@@ -566,10 +566,8 @@ class AgentConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentConfig:
         algorithm = _str(data.get("algorithm", "dqn"), "agent.algorithm")
-        if algorithm not in {"dqn", "ppo"}:
-            raise ConfigError("agent.algorithm must be dqn or ppo")
-        if algorithm != "dqn":
-            raise ConfigError("V1 scaffold currently supports only dqn")
+        if algorithm not in {"dqn", "linear_q"}:
+            raise ConfigError("agent.algorithm must be dqn or linear_q")
         gamma = _positive_float(data.get("gamma", 0.997), "agent.gamma")
         if gamma >= 1.0:
             raise ConfigError("agent.gamma must be < 1.0")

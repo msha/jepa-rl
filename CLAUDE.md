@@ -32,6 +32,10 @@ Implemented now:
 - uv-managed environment: `uv sync` creates `.venv` and installs from `uv.lock`. Dev tooling (pytest, ruff) is in the `[dependency-groups].dev` table; runtime extras (`config`, `browser`, `train`, `all`) remain under `[project.optional-dependencies]`.
 - `jepa-rl validate-config`.
 - `jepa-rl init-run`.
+- `jepa-rl open-game` to launch the configured game in visible Chromium.
+- `jepa-rl ml-smoke` to verify the current linear Q learner reduces synthetic loss.
+- `jepa-rl dashboard --run ...` to generate/open the run dashboard HTML.
+- `jepa-rl ui --config ...` to run the live local control panel.
 - `jepa-rl collect-random` for the local Breakout smoke game.
 - `jepa-rl train` for the current NumPy linear pixel-Q smoke model.
 - `jepa-rl eval` for the current `.npz` smoke-model checkpoints.
@@ -124,6 +128,24 @@ V1 is **not** "superhuman Breakout." It is, in order:
 5. JEPA+DQN reaches the same score as pixel DQN in **fewer environment steps**.
 
 Sample efficiency is the headline metric, not absolute high score. Evaluation must report scores at fixed budgets (100k, 500k, 1M, 5M env steps).
+
+## Local Development Hardware
+
+This dev machine is **Apple Silicon (macOS, MPS-capable)**. `experiment.device: auto`
+resolves to MPS via `models/device.py::resolve_torch_device`. Notes:
+
+- `configs/base.yaml` ships with `experiment.device: cpu` for safe smoke defaults;
+  real training runs should override to `device: auto` (or explicitly `mps`).
+- Smoke tests (`tests/test_dqn_*.py`, `tests/test_checkpoint_resume.py`) pin
+  `device: cpu` for determinism and to avoid the ~20 s MPS kernel-cache warmup.
+- MPS gotchas the trainer accounts for:
+  - `os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")` so unsupported ops
+    fall back to CPU instead of crashing.
+  - fp16/bf16 are unsupported for many ops on MPS — fp32 only for V1.
+  - `map_location="cpu"` on every checkpoint load so MPS-saved `.pt` files load on
+    CPU CI.
+  - `torch.use_deterministic_algorithms(True)` is not honored on MPS; smoke tests
+    use statistical margins (`mean + 3*std`), not bit-exact equality.
 
 ## Recommended Stack (Phase 0 pinned, more arrives per phase)
 
