@@ -1,0 +1,7 @@
+extends:
+  - ../../../configs/base.yaml
+
+reward:
+  score_reader: javascript
+  privileged: false
+

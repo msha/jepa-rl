@@ -1,0 +1,8 @@
+extends:
+  - ../../../configs/base.yaml
+
+world_model:
+  predictor:
+    conditioning:
+      policy_embedding: true
+

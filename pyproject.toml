@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jepa-rl"
+version = "0.1.0"
+description = "JEPA-based reinforcement learning agents for browser games."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "JEPA-RL Contributors" }
+]
+keywords = ["reinforcement-learning", "jepa", "browser-games", "world-models"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = []
+
+[project.optional-dependencies]
+config = [
+  "PyYAML>=6.0",
+]
+browser = [
+  "playwright>=1.45",
+  "pillow>=10",
+  "opencv-python>=4.9",
+]
+train = [
+  "numpy>=1.26",
+  "torch>=2.3",
+]
+all = [
+  "PyYAML>=6.0",
+  "playwright>=1.45",
+  "pillow>=10",
+  "opencv-python>=4.9",
+  "numpy>=1.26",
+  "torch>=2.3",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+jepa-rl = "jepa_rl.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = []
+
+[tool.uv]
+default-groups = ["dev"]
+managed = true

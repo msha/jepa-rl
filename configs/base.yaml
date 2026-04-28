@@ -1,0 +1,150 @@
+experiment:
+  name: local_smoke
+  seed: 42
+  device: cpu
+  precision: fp32
+  output_dir: runs
+
+game:
+  name: placeholder_game
+  url: "http://localhost:8000"
+  browser: chromium
+  headless: true
+  fps: 30
+  action_repeat: 4
+  max_steps_per_episode: 10000
+  reset_timeout_sec: 10
+
+observation:
+  mode: screenshot
+  width: 160
+  height: 120
+  grayscale: false
+  frame_stack: 4
+  crop: null
+  normalize: true
+
+actions:
+  type: discrete_keyboard
+  repeat: 4
+  keys:
+    - noop
+    - ArrowLeft
+    - ArrowRight
+    - Space
+    - ArrowLeft+Space
+    - ArrowRight+Space
+
+reward:
+  type: score_delta
+  score_reader: dom
+  score_selector: "#score"
+  score_region: null
+  survival_bonus: 0.0
+  idle_penalty: 0.0
+  death_penalty: 0.0
+  clip_rewards: false
+  privileged: false
+
+world_model:
+  enabled: true
+  latent_dim: 512
+  encoder:
+    type: conv
+    hidden_channels:
+      - 32
+      - 64
+      - 128
+      - 256
+  predictor:
+    type: transformer
+    hidden_dim: 512
+    depth: 4
+    num_heads: 8
+    horizons:
+      - 1
+      - 2
+      - 4
+      - 8
+    action_embed_dim: 64
+    action_chunk_size: 4
+    conditioning:
+      action_sequence: true
+      policy_embedding: false
+      task_or_goal_embedding: false
+      value_guidance: false
+  optimizer:
+    type: adamw
+    lr: 0.0003
+    weight_decay: 0.05
+    betas:
+      - 0.9
+      - 0.95
+  loss:
+    prediction: cosine_mse
+    lambda_var: 1.0
+    lambda_cov: 0.04
+    latent_norm: true
+    variance_floor: 1.0
+  target_encoder:
+    ema_tau_start: 0.996
+    ema_tau_end: 0.9999
+    stop_gradient: true
+
+agent:
+  algorithm: dqn
+  gamma: 0.997
+  n_step: 5
+  batch_size: 256
+  target_update_interval: 2000
+  learning_starts: 10000
+  train_every: 4
+  gradient_steps: 1
+  q_network:
+    hidden_dims:
+      - 512
+      - 512
+    dueling: true
+    distributional: false
+  optimizer:
+    type: adamw
+    lr: 0.0001
+    weight_decay: 0.01
+
+replay:
+  capacity: 1000000
+  prioritized: true
+  priority_alpha: 0.6
+  priority_beta_start: 0.4
+  priority_beta_end: 1.0
+  sequence_length: 16
+
+exploration:
+  type: epsilon_greedy
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 500000
+  intrinsic_reward:
+    enabled: true
+    source: jepa_prediction_error
+    beta: 0.01
+    normalize: true
+
+training:
+  passive_pretrain_steps: 100000
+  total_env_steps: 5000000
+  learning_starts: 10000
+  train_every: 4
+  world_updates_per_env_step: 1
+  policy_updates_per_env_step: 1
+  eval_interval_steps: 50000
+  checkpoint_interval_steps: 50000
+  planning_start_step: 1000000
+  planning_eval_only_until: 2000000
+
+evaluation:
+  episodes: 20
+  deterministic: true
+  record_video: true
+  save_best_by: mean_score
+

@@ -1,0 +1,35 @@
+observation:
+  width: 224
+  height: 224
+  grayscale: false
+
+world_model:
+  latent_dim: 768
+  encoder:
+    type: vit
+    hidden_channels:
+      - 64
+      - 128
+      - 256
+    image_size:
+      - 224
+      - 224
+    patch_size: 8
+    embed_dim: 512
+    depth: 8
+    num_heads: 8
+    mlp_ratio: 4
+  predictor:
+    hidden_dim: 768
+    depth: 6
+    num_heads: 12
+
+agent:
+  q_network:
+    hidden_dims:
+      - 1024
+      - 1024
+
+replay:
+  capacity: 2000000
+

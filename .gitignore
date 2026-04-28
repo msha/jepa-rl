@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+.venv/
+venv/
+
+# Project artifacts
+runs/
+checkpoints/
+videos/
+replay/
+diagnostics/
+browser_profiles/
+playwright-report/
+test-results/
+
+# Training artifacts
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.mp4
+*.webm
+*.jsonl
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+

@@ -1,0 +1,41 @@
+extends:
+  - ../base.yaml
+  - ../presets/small.yaml
+
+experiment:
+  name: breakout_jepa_dqn_small
+  seed: 42
+  device: cpu
+  precision: fp32
+
+game:
+  name: breakout
+  url: "http://localhost:8000/breakout.html"
+  headless: true
+  fps: 30
+  action_repeat: 4
+  max_steps_per_episode: 10000
+
+actions:
+  type: discrete_keyboard
+  repeat: 4
+  keys:
+    - noop
+    - ArrowLeft
+    - ArrowRight
+    - Space
+    - ArrowLeft+Space
+    - ArrowRight+Space
+
+reward:
+  type: score_delta
+  score_reader: dom
+  score_selector: "#score"
+  privileged: false
+
+evaluation:
+  episodes: 20
+  deterministic: true
+  record_video: true
+  save_best_by: mean_score
+

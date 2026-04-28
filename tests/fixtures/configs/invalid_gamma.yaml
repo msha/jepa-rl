@@ -1,0 +1,6 @@
+extends:
+  - ../../../configs/base.yaml
+
+agent:
+  gamma: 1.0
+

@@ -1,0 +1,29 @@
+observation:
+  width: 160
+  height: 120
+  grayscale: false
+
+world_model:
+  latent_dim: 512
+  encoder:
+    type: conv
+    hidden_channels:
+      - 32
+      - 64
+      - 128
+      - 256
+  predictor:
+    hidden_dim: 512
+    depth: 4
+    num_heads: 8
+
+agent:
+  batch_size: 256
+  q_network:
+    hidden_dims:
+      - 512
+      - 512
+
+replay:
+  capacity: 1000000
+
