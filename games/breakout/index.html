@@ -149,15 +149,24 @@
         return Math.min(BASE_BALL_SPEED + (wave - 1) * 0.15, MAX_BALL_SPEED);
       }
 
-      function brickHP(row) {
-        // top rows are fortified: row 0 = 3hp, row 1 = 2hp, rest = 1hp
-        return Math.max(1, 3 - row);
+      function brickHPForWave(row, currentWave) {
+        // first 5 waves: all normal
+        if (currentWave <= 5) return 1;
+        // after wave 5: chance of fortified increases with wave number
+        const fortChance = Math.min(0.8, (currentWave - 5) * 0.08);
+        // top rows more likely to be fortified
+        const rowBias = (brickRows - row) / brickRows;
+        if (Math.random() < fortChance * rowBias) {
+          return Math.min(3, 1 + Math.floor((currentWave - 5) / 4));
+        }
+        return 1;
       }
 
       function resetBricks() {
         bricks = [];
         for (let row = 0; row < brickRows; row += 1) {
           for (let col = 0; col < brickCols; col += 1) {
+            const hp = 1;
             bricks.push({
               x: brickOffsetX + col * (brickW + brickGap),
               y: brickOffsetY + row * (brickH + brickGap),
@@ -165,8 +174,8 @@
               h: brickH,
               alive: true,
               row,
-              hp: brickHP(row),
-              maxHP: brickHP(row),
+              hp,
+              maxHP: hp,
             });
           }
         }
@@ -191,6 +200,7 @@
         wave += 1;
         for (let row = 0; row < brickRows; row += 1) {
           for (let col = 0; col < brickCols; col += 1) {
+            const hp = brickHPForWave(row, wave);
             bricks.push({
               x: brickOffsetX + col * (brickW + brickGap),
               y: brickOffsetY + row * (brickH + brickGap),
@@ -198,8 +208,8 @@
               h: brickH,
               alive: true,
               row,
-              hp: brickHP(row),
-              maxHP: brickHP(row),
+              hp,
+              maxHP: hp,
             });
           }
         }

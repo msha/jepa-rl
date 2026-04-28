@@ -1,6 +1,11 @@
 # ruff: noqa: E501
 
+import base64
+import collections
+import dataclasses
+import io
 import json
+import mimetypes
 import threading
 import time
 import webbrowser
@@ -12,7 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from jepa_rl.browser.playwright_env import resolve_game_url
-from jepa_rl.training.simple_q import evaluate_linear_q, train_linear_q
+from jepa_rl.training.simple_q import train_linear_q
 from jepa_rl.utils.artifacts import create_run_dir
 from jepa_rl.utils.config import ProjectConfig, load_config, snapshot_config
 
@@ -31,6 +36,23 @@ class TrainingJob:
 
 
 @dataclass
+class EvalJob:
+    run_name: str
+    run_dir: Path
+    config: ProjectConfig
+    algorithm: str
+    episodes_target: int
+    episode_count: int = 0
+    scores: list = field(default_factory=list)
+    status: str = "running"
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    model: Any = None
+    device: Any = None
+    frame_buffer: Any = None
+
+
+@dataclass
 class UiState:
     config_path: Path
     config: ProjectConfig
@@ -41,7 +63,7 @@ class UiState:
     dashboard_every: int
     run_dir: Path
     job: TrainingJob | None = None
-    last_eval: dict[str, Any] | None = None
+    eval_job: EvalJob | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -108,6 +130,12 @@ def run_ui_server(
         server.server_close()
 
 
+def _ui_dist_dir() -> Path | None:
+    """Return the ui/dist/ directory if it exists (built Vue app)."""
+    d = Path(__file__).resolve().parent.parent.parent.parent / "ui" / "dist"
+    return d if d.is_dir() else None
+
+
 def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
     class TrainingUiHandler(BaseHTTPRequestHandler):
         server_version = "JepaRlTrainingUi/0.1"
@@ -115,7 +143,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/":
-                self._send_html(render_ui_html(state))
+                self._send_index()
             elif parsed.path == "/game":
                 self._send_game()
             elif parsed.path == "/api/state":
@@ -124,11 +152,15 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(list_runs(state))
             elif parsed.path == "/api/configs":
                 self._send_json(list_configs())
+            elif parsed.path == "/api/defaults":
+                self._send_json(_get_defaults(state))
             elif parsed.path.startswith("/api/run-detail"):
                 qs = parse_qs(urlparse(self.path).query)
                 self._send_run_detail(qs)
             elif parsed.path == "/api/frame":
                 self._send_frame()
+            elif parsed.path.startswith("/assets/"):
+                self._send_static_asset(parsed.path)
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -138,15 +170,41 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 self._handle_train_start()
             elif parsed.path == "/api/train/stop":
                 self._handle_train_stop()
-            elif parsed.path == "/api/eval":
-                self._handle_eval()
+            elif parsed.path == "/api/eval/start":
+                self._handle_eval_start()
+            elif parsed.path == "/api/eval/step":
+                self._handle_eval_step()
+            elif parsed.path == "/api/eval/stop":
+                self._handle_eval_stop()
             elif parsed.path == "/api/switch-config":
                 self._handle_switch_config()
+            elif parsed.path == "/api/update-config":
+                self._handle_update_config()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
         def log_message(self, format: str, *args: Any) -> None:
             return
+
+        def _send_index(self) -> None:
+            dist = _ui_dist_dir()
+            if dist is not None and (dist / "index.html").exists():
+                self._send_file(dist / "index.html", "text/html; charset=utf-8")
+            else:
+                self._send_html(render_ui_html(state))
+
+        def _send_static_asset(self, request_path: str) -> None:
+            dist = _ui_dist_dir()
+            if dist is None:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            rel = request_path.lstrip("/")
+            file_path = (dist / rel).resolve()
+            if not file_path.is_relative_to(dist.resolve()) or not file_path.exists():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            mime, _ = mimetypes.guess_type(file_path.name)
+            self._send_file(file_path, mime or "application/octet-stream")
 
         def _handle_train_start(self) -> None:
             body = self._read_json_body()
@@ -198,44 +256,155 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 state.job.stop_event.set()
             self._send_json({"ok": True, "status": "stopping"})
 
-        def _handle_eval(self) -> None:
+        def _handle_eval_start(self) -> None:
             body = self._read_json_body()
-            episodes = int(body.get("episodes") or 1)
-            algorithm = state.config.agent.algorithm
+            episodes = int(body.get("episodes") or 3)
+            eval_run_dir_str = body.get("run_dir")
+            eval_run_dir = Path(eval_run_dir_str) if eval_run_dir_str else state.run_dir
+            eval_config = state.config
+            snapshot = eval_run_dir / "config.yaml"
+            if snapshot.exists():
+                try:
+                    eval_config = load_config(snapshot)
+                except Exception as exc:  # noqa: BLE001
+                    self._send_json({"ok": False, "error": f"run config invalid: {exc}"}, status=400)
+                    return
+            algorithm = eval_config.agent.algorithm
             ckpt_name = body.get("checkpoint")
             if ckpt_name:
-                checkpoint = state.run_dir / "checkpoints" / ckpt_name
-            elif algorithm == "dqn":
-                checkpoint = state.run_dir / "checkpoints" / "latest.pt"
+                checkpoint = eval_run_dir / "checkpoints" / ckpt_name
             else:
-                checkpoint = state.run_dir / "checkpoints" / "latest.npz"
+                suffix = ".pt" if algorithm == "dqn" else ".npz"
+                checkpoint = eval_run_dir / "checkpoints" / f"latest{suffix}"
             if not checkpoint.exists():
-                self._send_json({"ok": False, "error": "checkpoint does not exist"}, status=404)
+                self._send_json({"ok": False, "error": f"checkpoint not found: {checkpoint.name}"}, status=404)
                 return
             try:
+                device = None
                 if algorithm == "dqn":
-                    from jepa_rl.training.pixel_dqn import evaluate_dqn
-                    result = evaluate_dqn(
-                        state.config,
-                        checkpoint=checkpoint,
-                        episodes=episodes,
-                        headless=True,
-                        run_dir=state.run_dir,
-                    )
+                    from jepa_rl.models.device import resolve_torch_device
+                    from jepa_rl.models.dqn import build_q_network
+                    from jepa_rl.utils.checkpoint import load_torch_checkpoint
+
+                    device = resolve_torch_device(eval_config.experiment.device)
+                    net = build_q_network(eval_config, num_actions=eval_config.actions.num_actions).to(device)
+                    load_torch_checkpoint(checkpoint, model=net, target_model=None, optimizer=None)
+                    net.eval()
+                    model = net
+                elif algorithm == "linear_q":
+                    from jepa_rl.training.simple_q import LinearQModel
+
+                    model = LinearQModel.load(checkpoint)
                 else:
-                    result = evaluate_linear_q(
-                        state.config,
-                        checkpoint=checkpoint,
-                        episodes=episodes,
-                        headless=True,
-                        run_dir=state.run_dir,
-                    )
-            except Exception as exc:  # noqa: BLE001 - convert local UI failures to JSON.
+                    self._send_json({"ok": False, "error": f"in-iframe eval not supported for {algorithm}"}, status=400)
+                    return
+                frame_stack = eval_config.observation.frame_stack
+                frame_buffer: collections.deque = collections.deque(maxlen=frame_stack)
+            except Exception as exc:  # noqa: BLE001
                 self._send_json({"ok": False, "error": str(exc)}, status=500)
                 return
             with state.lock:
-                state.last_eval = result
-            self._send_json({"ok": True, "result": result})
+                state.eval_job = EvalJob(
+                    run_name=eval_run_dir.name,
+                    run_dir=eval_run_dir,
+                    config=eval_config,
+                    algorithm=algorithm,
+                    episodes_target=episodes,
+                    model=model,
+                    device=device,
+                    frame_buffer=frame_buffer,
+                )
+            self._send_json({"ok": True})
+
+        def _handle_eval_step(self) -> None:
+            with state.lock:
+                eval_job = state.eval_job
+            if eval_job is None or eval_job.model is None:
+                self._send_json({"ok": False, "error": "no eval session; call /api/eval/start first"}, status=400)
+                return
+            eval_config = eval_job.config
+            body = self._read_json_body()
+            frame_b64 = body.get("frame", "")
+            is_done = bool(body.get("done", False))
+            score = float(body.get("score") or 0.0)
+
+            if is_done:
+                with state.lock:
+                    eval_job.scores.append(score)
+                    eval_job.episode_count += 1
+                    eval_job.frame_buffer.clear()
+                    ep_count = eval_job.episode_count
+                    ep_target = eval_job.episodes_target
+                    complete = ep_count >= ep_target
+                    if complete:
+                        import numpy as np
+                        sc = eval_job.scores
+                        eval_job.status = "completed"
+                        eval_job.result = {
+                            "episodes": ep_count,
+                            "scores": sc,
+                            "best_score": max(sc) if sc else 0.0,
+                            "mean_score": float(np.mean(sc)) if sc else 0.0,
+                        }
+                self._send_json({"ok": True, "done": True, "complete": complete, "episode": ep_count})
+                return
+
+            try:
+                png_bytes = base64.b64decode(frame_b64)
+                frame = _preprocess_canvas_frame(png_bytes, eval_config)
+            except Exception as exc:  # noqa: BLE001
+                with state.lock:
+                    eval_job.status = "error"
+                    eval_job.error = f"frame decode failed: {exc}"
+                self._send_json({"ok": False, "error": f"frame decode failed: {exc}"}, status=400)
+                return
+
+            with state.lock:
+                eval_job.frame_buffer.append(frame)
+                frames = list(eval_job.frame_buffer)
+                model = eval_job.model
+                device = eval_job.device
+                algorithm = eval_job.algorithm
+
+            while len(frames) < eval_config.observation.frame_stack:
+                frames.insert(0, frames[0])
+
+            try:
+                import numpy as np
+
+                obs = np.concatenate(frames, axis=0)
+                if algorithm == "dqn":
+                    import torch
+
+                    obs_t = torch.from_numpy(obs[None]).to(device)
+                    with torch.no_grad():
+                        action_idx = int(model(obs_t).argmax(dim=1).item())
+                else:
+                    from jepa_rl.envs.browser_game_env import Observation
+                    from jepa_rl.training.simple_q import featurize_observation
+
+                    observation = Observation(
+                        data=obs,
+                        width=eval_config.observation.width,
+                        height=eval_config.observation.height,
+                        channels=obs.shape[0],
+                    )
+                    features = featurize_observation(observation)
+                    action_idx = int(np.argmax(model.q_values(features)))
+                action_key = eval_config.actions.keys[action_idx]
+            except Exception as exc:  # noqa: BLE001
+                with state.lock:
+                    eval_job.status = "error"
+                    eval_job.error = f"inference failed: {exc}"
+                self._send_json({"ok": False, "error": f"inference failed: {exc}"}, status=500)
+                return
+
+            self._send_json({"ok": True, "done": False, "complete": False, "action": action_key})
+
+        def _handle_eval_stop(self) -> None:
+            with state.lock:
+                state.eval_job = None
+            self._send_json({"ok": True})
 
         def _handle_switch_config(self) -> None:
             body = self._read_json_body()
@@ -256,6 +425,29 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 state.config = new_config
                 state.config_path = new_path
             self._send_json({"ok": True, "game": new_config.game.name})
+
+        def _handle_update_config(self) -> None:
+            body = self._read_json_body()
+            overrides = body.get("overrides")
+            if not overrides or not isinstance(overrides, list):
+                self._send_json({"ok": False, "error": "overrides list required"}, status=400)
+                return
+            with state.lock:
+                if state.job is not None and state.job.thread.is_alive():
+                    self._send_json({"ok": False, "error": "cannot update config while training"}, status=409)
+                    return
+                try:
+                    new_config = state.config
+                    for item in overrides:
+                        group = str(item.get("group", ""))
+                        key = str(item.get("key", ""))
+                        value = str(item.get("value", ""))
+                        new_config = _apply_config_override(new_config, group, key, value)
+                    state.config = new_config
+                except Exception as exc:  # noqa: BLE001
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+                    return
+            self._send_json({"ok": True})
 
         def _send_game(self) -> None:
             game_url = resolve_game_url(state.config.game.url)
@@ -334,7 +526,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             except Exception:  # noqa: BLE001
                 detail = []
             summary = _read_json(run_dir / "metrics" / "train_summary.json")
-            self._send_json({"detail": detail, "summary": summary, "checkpoints": _list_checkpoints(run_dir)})
+            self._send_json({"detail": detail, "summary": summary, "checkpoints": _list_checkpoints(run_dir), "run_dir": str(run_dir)})
 
     return TrainingUiHandler
 
@@ -395,11 +587,64 @@ def _training_worker(
             state.job.completed_at = time.time()
 
 
+
+_CONFIG_GROUPS: dict[str, type] = {
+    "experiment": type(None),  # filled at runtime
+    "game": type(None),
+    "observation": type(None),
+    "actions": type(None),
+    "reward": type(None),
+    "agent": type(None),
+    "exploration": type(None),
+    "replay": type(None),
+    "world_model": type(None),
+    "training": type(None),
+}
+
+
+def _apply_config_override(config: ProjectConfig, group: str, key: str, value: str) -> ProjectConfig:
+    group_map = {
+        "experiment": config.experiment,
+        "game": config.game,
+        "observation": config.observation,
+        "actions": config.actions,
+        "reward": config.reward,
+        "agent": config.agent,
+        "exploration": config.exploration,
+        "replay": config.replay,
+        "world_model": config.world_model,
+        "training": config.training,
+    }
+    sub = group_map.get(group)
+    if sub is None or not hasattr(sub, key):
+        raise ValueError(f"unknown config field: {group}.{key}")
+    field_type = None
+    for f in dataclasses.fields(sub):
+        if f.name == key:
+            field_type = f.type
+            break
+    if field_type is None:
+        raise ValueError(f"unknown config field: {group}.{key}")
+    if field_type in ("bool", bool):
+        parsed = value.lower() in ("true", "1", "yes")
+    elif field_type in ("int", int):
+        parsed = int(value)
+    elif field_type in ("float", float):
+        parsed = float(value)
+    else:
+        parsed = value
+    new_sub = dataclasses.replace(sub, **{key: parsed})
+    return dataclasses.replace(config, **{group: new_sub})
+
+
 def list_configs() -> dict[str, Any]:
     configs: list[dict[str, str]] = []
     games_dir = Path("configs/games")
+    _skip_suffixes = ("_smoke", "_test", "_fixture")
     if games_dir.is_dir():
         for p in sorted(games_dir.glob("*.yaml")):
+            if any(p.stem.endswith(s) for s in _skip_suffixes):
+                continue
             configs.append({"path": str(p), "name": p.stem})
     return {"configs": configs}
 
@@ -430,107 +675,103 @@ def _list_checkpoints(run_dir: Path) -> list[str]:
 
 
 def _build_config_detail(config: ProjectConfig) -> list[dict[str, Any]]:
+    # Field format: (key, value, tooltip, meta_dict)
+    # meta_dict keys: type ("text","number","select","bool","readonly"), options, min, max, step
     groups = [
         {
             "title": "experiment",
             "fields": [
-                ("name", config.experiment.name, "Run identifier"),
-                ("seed", config.experiment.seed, "Random seed for reproducibility"),
-                ("device", config.experiment.device, "Compute device: cpu, auto, mps, cuda"),
-                ("precision", config.experiment.precision, "Numeric precision: fp32, fp16, bf16"),
-                ("output_dir", config.experiment.output_dir, "Directory for run artifacts"),
-            ],
-        },
-        {
-            "title": "game",
-            "fields": [
-                ("name", config.game.name, "Game identifier"),
-                ("url", config.game.url, "Game URL or file path"),
-                ("browser", config.game.browser, "Browser engine: chromium, chrome"),
-                ("fps", config.game.fps, "Frames per second for screenshots"),
-                ("action_repeat", config.game.action_repeat, "Repeat each action N times"),
-                ("max_steps", config.game.max_steps_per_episode, "Max steps before forced reset"),
+                ("name", config.experiment.name, "Run identifier", {"type": "text"}),
+                ("device", config.experiment.device, "Compute device", {"type": "select", "options": ["cpu", "auto", "mps", "cuda"]}),
+                ("precision", config.experiment.precision, "Numeric precision", {"type": "select", "options": ["fp32", "fp16", "bf16"]}),
+                ("seed", config.experiment.seed, "Random seed", {"type": "number", "min": 0}),
             ],
         },
         {
             "title": "observation",
             "fields": [
-                ("mode", config.observation.mode, "Capture method: screenshot, canvas, dom_assisted, hybrid"),
-                ("size", f"{config.observation.width}x{config.observation.height}", "Obs resolution in pixels"),
-                ("grayscale", config.observation.grayscale, "Convert to single channel"),
-                ("frame_stack", config.observation.frame_stack, "Stack N consecutive frames together"),
-                ("channels", config.observation.input_channels, "Total input channels (computed)"),
-                ("normalize", config.observation.normalize, "Scale pixels to [0,1]"),
-            ],
-        },
-        {
-            "title": "actions",
-            "fields": [
-                ("type", config.actions.type, "Action space type"),
-                ("keys", ", ".join(config.actions.keys), "Mapped keyboard keys"),
-                ("num_actions", config.actions.num_actions, "Discrete action count"),
-            ],
-        },
-        {
-            "title": "reward",
-            "fields": [
-                ("type", config.reward.type, "Reward function: score_delta"),
-                ("score_reader", config.reward.score_reader, "How to read score: dom, ocr, javascript"),
-                ("score_selector", config.reward.score_selector or "auto", "CSS selector for DOM score element"),
-                ("survival_bonus", config.reward.survival_bonus, "Reward per step survived"),
-                ("idle_penalty", config.reward.idle_penalty, "Penalty for no score change"),
-                ("clip_rewards", config.reward.clip_rewards, "Clip rewards to [-1, 1]"),
+                ("mode", config.observation.mode, "Capture method", {"type": "select", "options": ["screenshot", "canvas", "dom_assisted", "hybrid"]}),
+                ("width", config.observation.width, "Width in pixels", {"type": "number", "min": 1, "max": 1024}),
+                ("height", config.observation.height, "Height in pixels", {"type": "number", "min": 1, "max": 1024}),
+                ("frame_stack", config.observation.frame_stack, "Frames to stack", {"type": "number", "min": 1, "max": 32}),
+                ("grayscale", config.observation.grayscale, "Grayscale", {"type": "bool"}),
+                ("normalize", config.observation.normalize, "Normalize to [0,1]", {"type": "bool"}),
+                ("input_channels", config.observation.input_channels, "Input channels", {"type": "readonly"}),
             ],
         },
         {
             "title": "agent",
             "fields": [
-                ("algorithm", config.agent.algorithm, "RL algorithm: dqn, linear_q"),
-                ("gamma", config.agent.gamma, "Discount factor for future rewards"),
-                ("n_step", config.agent.n_step, "N-step return for TD learning"),
-                ("batch_size", config.agent.batch_size, "Minibatch size for gradient updates"),
-                ("target_sync", config.agent.target_update_interval, "Steps between target network syncs"),
-                ("learning_starts", config.agent.learning_starts, "Env steps before first update"),
-                ("train_every", config.agent.train_every, "Update every N env steps"),
+                ("algorithm", config.agent.algorithm, "RL algorithm", {"type": "select", "options": ["dqn", "linear_q"]}),
+                ("gamma", config.agent.gamma, "Discount factor", {"type": "number", "min": 0, "max": 1, "step": 0.001}),
+                ("n_step", config.agent.n_step, "N-step return", {"type": "number", "min": 1}),
+                ("batch_size", config.agent.batch_size, "Batch size", {"type": "number", "min": 1}),
+                ("learning_starts", config.agent.learning_starts, "Steps before learning", {"type": "number", "min": 0}),
+                ("train_every", config.agent.train_every, "Train every N steps", {"type": "number", "min": 1}),
+                ("target_update_interval", config.agent.target_update_interval, "Target sync interval", {"type": "number", "min": 1}),
             ],
         },
         {
             "title": "exploration",
             "fields": [
-                ("type", config.exploration.type, "Strategy: epsilon_greedy"),
-                ("epsilon_start", config.exploration.epsilon_start, "Initial exploration rate"),
-                ("epsilon_end", config.exploration.epsilon_end, "Final exploration rate"),
-                ("epsilon_decay", config.exploration.epsilon_decay_steps, "Steps for epsilon annealing"),
+                ("epsilon_start", config.exploration.epsilon_start, "Initial epsilon", {"type": "number", "min": 0, "max": 1, "step": 0.01}),
+                ("epsilon_end", config.exploration.epsilon_end, "Final epsilon", {"type": "number", "min": 0, "max": 1, "step": 0.01}),
+                ("epsilon_decay_steps", config.exploration.epsilon_decay_steps, "Decay steps", {"type": "number", "min": 1}),
             ],
         },
         {
             "title": "replay",
             "fields": [
-                ("capacity", config.replay.capacity, "Max experiences stored"),
-                ("prioritized", config.replay.prioritized, "Use prioritized experience replay"),
-                ("seq_length", config.replay.sequence_length, "Sequence length for JEPA sampling"),
+                ("capacity", config.replay.capacity, "Buffer capacity", {"type": "number", "min": 100}),
+                ("prioritized", config.replay.prioritized, "Prioritized replay", {"type": "bool"}),
+                ("sequence_length", config.replay.sequence_length, "Sequence length", {"type": "number", "min": 1}),
             ],
         },
         {
-            "title": "world model",
+            "title": "world_model",
             "fields": [
-                ("enabled", config.world_model.enabled, "Use JEPA world model"),
-                ("latent_dim", config.world_model.latent_dim, "Latent representation dimension"),
-                ("encoder", config.world_model.encoder.type, "Encoder architecture: conv, vit"),
-                ("predictor", config.world_model.predictor.type, "Predictor: transformer, gru"),
-                ("depth", config.world_model.predictor.depth, "Predictor layer depth"),
-                ("horizons", list(config.world_model.predictor.horizons), "Prediction horizons in steps"),
-                ("loss", config.world_model.loss.prediction, "Loss function: cosine_mse, mse"),
-                ("ema_tau", f"{config.world_model.target_encoder.ema_tau_start}-{config.world_model.target_encoder.ema_tau_end}", "EMA momentum schedule"),
+                ("enabled", config.world_model.enabled, "Use JEPA world model", {"type": "bool"}),
+                ("latent_dim", config.world_model.latent_dim, "Latent dim", {"type": "number", "min": 1}),
+                ("encoder", config.world_model.encoder.type, "Encoder", {"type": "readonly"}),
+                ("predictor", config.world_model.predictor.type, "Predictor", {"type": "readonly"}),
+                ("horizons", list(config.world_model.predictor.horizons), "Horizons", {"type": "readonly"}),
+                ("loss", config.world_model.loss.prediction, "Loss function", {"type": "readonly"}),
+                ("ema_tau", f"{config.world_model.target_encoder.ema_tau_start}–{config.world_model.target_encoder.ema_tau_end}", "EMA tau schedule", {"type": "readonly"}),
+            ],
+        },
+        {
+            "title": "game",
+            "collapsed": True,
+            "fields": [
+                ("name", config.game.name, "Game name", {"type": "readonly"}),
+                ("fps", config.game.fps, "Screenshot FPS", {"type": "number", "min": 1, "max": 120}),
+                ("action_repeat", config.game.action_repeat, "Action repeat", {"type": "number", "min": 1, "max": 30}),
+                ("max_steps_per_episode", config.game.max_steps_per_episode, "Max steps/episode", {"type": "number", "min": 1}),
+                ("actions", config.actions.num_actions, "Action count", {"type": "readonly"}),
+                ("keys", ", ".join(config.actions.keys), "Action keys", {"type": "readonly"}),
+                ("reward", config.reward.type, "Reward type", {"type": "readonly"}),
+                ("score_reader", config.reward.score_reader, "Score reader", {"type": "readonly"}),
+                ("clip_rewards", config.reward.clip_rewards, "Clip rewards [-1,1]", {"type": "readonly"}),
             ],
         },
     ]
     return groups
 
 
+def _get_defaults(state: UiState) -> dict[str, Any]:
+    return {
+        "run_name": state.run_dir.name,
+        "default_steps": state.default_steps,
+        "learning_starts": state.learning_starts,
+        "batch_size": state.batch_size,
+        "dashboard_every": state.dashboard_every,
+    }
+
+
 def build_state_payload(state: UiState) -> dict[str, Any]:
     with state.lock:
         job = state.job
+        eval_job = state.eval_job
         run_dir = job.run_dir if job is not None else state.run_dir
     summary = _read_json(run_dir / "metrics" / "train_summary.json")
     events = _read_jsonl(run_dir / "metrics" / "train_events.jsonl")
@@ -549,7 +790,17 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
                 "completed_at": job.completed_at,
                 "running": job.thread.is_alive(),
             }
-        last_eval = state.last_eval
+        eval_payload = None
+        if eval_job is not None:
+            eval_payload = {
+                "status": eval_job.status,
+                "run_name": eval_job.run_name,
+                "running": eval_job.status == "running",
+                "episode_count": eval_job.episode_count,
+                "episodes_target": eval_job.episodes_target,
+                "result": eval_job.result,
+                "error": eval_job.error,
+            }
 
     latest_step = step_events[-1] if step_events else {}
     payload: dict[str, Any] = {
@@ -566,6 +817,7 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
         "config": {
             "path": str(state.config_path),
             "game": state.config.game.name,
+            "reset_key": state.config.game.reset_key,
             "actions": state.config.actions.num_actions,
             "observation": {
                 "width": state.config.observation.width,
@@ -584,11 +836,11 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
         ],
         "config_detail": _build_config_detail(state.config),
         "job": job_payload,
+        "eval": eval_payload,
         "summary": summary,
         "latest_step": latest_step,
         "steps": step_events[-500:],
         "episodes": episode_events[-100:],
-        "last_eval": last_eval,
     }
     return payload
 
@@ -716,6 +968,66 @@ def render_ui_html(state: UiState) -> str:
         color: var(--red) !important;
         border-color: rgba(185,82,76,0.4) !important;
       }}
+      .hidden {{ display: none !important; }}
+      .run-info-bar {{
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 10px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        flex-shrink: 0;
+        font-size: 10px;
+      }}
+      .rib-dot {{
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }}
+      .rib-dot.idle {{ background: var(--muted); }}
+      .rib-dot.running {{ background: #5d9e5d; animation: pulse 1.5s infinite; }}
+      .rib-dot.evaluating {{ background: var(--accent); animation: pulse 1.5s infinite; }}
+      .rib-dot.stopped {{ background: var(--muted); }}
+      .rib-dot.error {{ background: var(--red); }}
+      .rib-status {{
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-size: 9px;
+      }}
+      .rib-detail {{
+        color: var(--muted);
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px;
+      }}
+      .cg-ckpt {{
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }}
+      .cg-ckpt-label {{
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        flex-shrink: 0;
+      }}
+      .cg-ckpt select {{
+        flex: 1;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        color: var(--text);
+        padding: 2px 4px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 10px;
+      }}
+      @keyframes pulse {{
+        0%, 100% {{ opacity: 1; }}
+        50% {{ opacity: 0.4; }}
+      }}
       main {{
         display: grid;
         grid-template-columns: 1fr 1fr 1fr;
@@ -787,12 +1099,12 @@ def render_ui_html(state: UiState) -> str:
         display: none;
         object-fit: contain;
         background: #08080a;
-        image-rendering: pixelated;
-        image-rendering: crisp-edges;
+        image-rendering: auto;
       }}
-      .game-section.training .train-frame {{ display: block; }}
-      .game-section.training .game-body {{ display: none; }}
+      .game-section.training .train-frame {{ display: none; }}
+      .game-section.training .game-body {{ display: block; }}
       .game-section.training .game-controls {{ display: none; }}
+      .game-section.evaluating .game-controls {{ display: none; }}
       .game-controls {{
         display: flex;
         gap: 4px;
@@ -925,6 +1237,141 @@ def render_ui_html(state: UiState) -> str:
         font-family: 'IBM Plex Mono', monospace;
         font-size: 11px;
       }}
+      .train-controls {{
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        background: var(--surface);
+        flex-shrink: 0;
+      }}
+      .tc-row {{
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 8px;
+        flex-wrap: wrap;
+      }}
+      .tc-row .field {{
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }}
+      .tc-row input {{
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        color: var(--text);
+        padding: 3px 5px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 11px;
+        width: 52px;
+      }}
+      .tc-actions {{
+        border-top: 1px solid var(--border);
+        gap: 4px;
+      }}
+      .tc-actions button {{
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        color: var(--text);
+        padding: 3px 10px;
+        font-family: 'Outfit', sans-serif;
+        font-size: 11px;
+        font-weight: 500;
+        cursor: pointer;
+      }}
+      .config-panel {{
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        overflow: hidden;
+        background: var(--surface);
+        flex-shrink: 0;
+      }}
+      .config-panel .section-header {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }}
+      .cfg-apply-btn {{
+        background: transparent;
+        border: 1px solid rgba(196,145,82,0.4);
+        border-radius: 2px;
+        color: var(--accent);
+        padding: 1px 8px;
+        font-family: 'Outfit', sans-serif;
+        font-size: 9px;
+        font-weight: 500;
+        cursor: pointer;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }}
+      .cfg-input {{
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        color: var(--text);
+        padding: 1px 4px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px;
+        width: 100%;
+        max-width: 160px;
+        text-align: right;
+      }}
+      .cfg-input:focus {{
+        outline: none;
+        border-color: var(--accent);
+      }}
+      .cfg-select {{
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        color: var(--text);
+        padding: 1px 2px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px;
+        width: 100%;
+        max-width: 160px;
+        text-align: right;
+        cursor: pointer;
+        appearance: none;
+        -webkit-appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%237a7a7a'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 4px center;
+        padding-right: 14px;
+      }}
+      .cfg-select:focus {{
+        outline: none;
+        border-color: var(--accent);
+      }}
+      .cfg-checkbox {{
+        accent-color: var(--accent);
+        cursor: pointer;
+        margin-left: auto;
+      }}
+      .cfg-row {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 2px 0;
+        gap: 6px;
+      }}
+      .cfg-key {{
+        font-size: 9px;
+        color: var(--muted);
+        cursor: help;
+        flex-shrink: 0;
+        white-space: nowrap;
+      }}
+      .cfg-val {{
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px;
+        color: var(--text);
+      }}
       .run-detail {{
         border: 1px solid var(--border);
         border-radius: 2px;
@@ -955,7 +1402,7 @@ def render_ui_html(state: UiState) -> str:
         font-variant-numeric: tabular-nums;
       }}
       .run-config {{
-        max-height: 200px;
+        max-height: none;
         overflow-y: auto;
         border-top: 1px solid var(--border);
         padding: 4px 8px;
@@ -970,24 +1417,19 @@ def render_ui_html(state: UiState) -> str:
         color: var(--accent);
         margin-top: 6px;
         margin-bottom: 2px;
+        cursor: pointer;
+        user-select: none;
+      }}
+      .cfg-group-title::before {{
+        content: '\\25BE ';
+      }}
+      .cfg-collapsed .cfg-group-title::before {{
+        content: '\\25B8 ';
+      }}
+      .cfg-collapsed .cfg-fields {{
+        display: none;
       }}
       .cfg-group:first-child .cfg-group-title {{ margin-top: 0; }}
-      .cfg-row {{
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        padding: 1px 0;
-      }}
-      .cfg-key {{
-        font-size: 9px;
-        color: var(--muted);
-        cursor: help;
-      }}
-      .cfg-val {{
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 9px;
-        color: var(--text);
-      }}
       .checkpoint-bar {{
         display: flex;
         gap: 4px;
@@ -1069,62 +1511,81 @@ def render_ui_html(state: UiState) -> str:
   </head>
   <body>
     <header>
-      <span class="brand">jepa-rl</span>
+      <span class="brand" title="JEPA-RL: Joint-Embedding Predictive Architecture for Reinforcement Learning">jepa-rl</span>
       <span class="sep"></span>
-      <span class="run-name">{run_name}</span>
+      <span class="run-name" title="Current active run directory">{run_name}</span>
       <span class="header-status" id="headerStatus"></span>
     </header>
     <div class="controls-bar">
-      <div class="field">game <select id="f-config"><option value="">loading...</option></select></div>
+      <div class="field" title="Select a game configuration to load">game <select id="f-config" title="Available game configs in configs/games/"><option value="">loading...</option></select></div>
     </div>
     <main>
       <div class="col col-left">
-        <div class="metrics" id="metrics"></div>
+        <div class="metrics" id="metrics" title="Live training metrics updated every refresh"></div>
         <div class="charts">
-          <div class="chart-panel"><div class="section-label">score</div><canvas id="scoreChart"></canvas></div>
-          <div class="chart-panel"><div class="section-label">loss</div><canvas id="lossChart"></canvas></div>
-          <div class="chart-panel"><div class="section-label">epsilon</div><canvas id="epsilonChart"></canvas></div>
-          <div class="chart-panel"><div class="section-label">td error</div><canvas id="tdChart"></canvas></div>
+          <div class="chart-panel" title="Game score over time"><div class="section-label">score</div><canvas id="scoreChart"></canvas></div>
+          <div class="chart-panel" title="Training loss (smooth L1) over time"><div class="section-label">loss</div><canvas id="lossChart"></canvas></div>
+          <div class="chart-panel" title="Exploration rate (epsilon) over time"><div class="section-label">epsilon</div><canvas id="epsilonChart"></canvas></div>
+          <div class="chart-panel" title="Temporal difference error over time"><div class="section-label">td error</div><canvas id="tdChart"></canvas></div>
         </div>
       </div>
       <div class="col col-center">
         <div class="game-section" id="gameSection">
           <div class="game-header">
-            <span class="gh-title" id="gameTitle">game view</span>
-            <span class="gh-status" id="gameStatus">manual play</span>
-            <span class="gh-stat" id="gameStats"></span>
-            <button onclick="toggleGame()" style="background:transparent;border:1px solid var(--border);border-radius:2px;color:var(--muted);padding:2px 8px;font-size:10px;cursor:pointer;font-family:'Outfit',sans-serif;">hide</button>
+            <span class="gh-title" id="gameTitle" title="Current view mode">game view</span>
+            <span class="gh-status" id="gameStatus" title="Current game or training status">manual play</span>
+            <span class="gh-stat" id="gameStats" title="Live score and lives from the game"></span>
+            <button onclick="toggleGame()" title="Show/hide the game view" style="background:transparent;border:1px solid var(--border);border-radius:2px;color:var(--muted);padding:2px 8px;font-size:10px;cursor:pointer;font-family:'Outfit',sans-serif;">hide</button>
           </div>
           <div class="game-body">
-            <iframe id="game" src="/game?embed" scrolling="no" style="overflow:hidden;"></iframe>
+            <iframe id="game" src="/game?embed" scrolling="no" style="overflow:hidden;" title="Game canvas"></iframe>
           </div>
-          <img class="train-frame" id="trainFrame" alt="training view" />
+          <img class="train-frame" id="trainFrame" alt="training view" title="Live training screenshot" />
           <div class="game-controls">
             <span class="ctrl-label">play</span>
-            <button onclick="gameAction('left')">&#9664; left</button>
-            <button onclick="gameAction('space')">serve</button>
-            <button onclick="gameAction('right')">right &#9654;</button>
-            <button onclick="gameAction('reset')">reset</button>
+            <button onclick="gameAction('left')" title="Send ArrowLeft key to the game">&#9664; left</button>
+            <button onclick="gameAction('space')" title="Send Space key (serve ball)">serve</button>
+            <button onclick="gameAction('right')" title="Send ArrowRight key to the game">right &#9654;</button>
+            <button onclick="gameAction('reset')" title="Send R key to reset the game">reset</button>
           </div>
         </div>
-        <div class="settings-table" id="gameSettings"></div>
+        <div class="settings-table" id="gameSettings" title="Game configuration settings for the active config"></div>
       </div>
       <div class="col col-right">
         <div class="run-select">
-          <select id="f-run" onchange="loadRunDetail()"><option value="">select run...</option></select>
+          <select id="f-run" onchange="loadRunDetail()" title="Select a past training run to view its details. Leave unselected to configure a new run."><option value="">select run...</option></select>
         </div>
-        <div class="run-detail" id="runDetail" style="display:none;">
-          <div class="section-header">run info</div>
-          <div class="run-summary" id="runSummary"></div>
-          <div class="checkpoint-bar" id="checkpointBar">
-            <span>checkpoint</span>
-            <select id="f-checkpoint"></select>
-            <button onclick="evalCheckpoint()">eval</button>
+        <div class="run-info-bar" id="runInfoBar" title="Current run status and key metrics">
+          <span class="rib-dot idle" id="ribDot"></span>
+          <span class="rib-status" id="ribStatus">idle</span>
+          <span class="rib-detail" id="ribDetail"></span>
+        </div>
+        <div class="train-controls" id="controlGroup">
+          <div class="tc-row">
+            <div class="field" title="Name for the new training run (creates runs/&lt;name&gt;/)">name <input id="f-run-name" type="text" value="ui_train" style="width:80px" title="Run name for new training"></div>
+            <div class="field" title="Total environment steps for this training run">steps <input id="f-steps" type="number" value="{default_steps}" min="1" title="Number of game steps to train"></div>
+            <div class="field" title="Steps before model updates begin (fills replay buffer first)">warmup <input id="f-ls" type="number" value="{learning_starts}" min="0" title="Warmup steps before learning starts"></div>
           </div>
+          <div class="tc-row">
+            <div class="field" title="Minibatch size for gradient updates (leave empty for config default)">batch <input id="f-bs" type="number" value="{batch_size}" min="1" placeholder="auto" title="Batch size override"></div>
+            <div class="field" title="Rewrite dashboard every N steps">log&nbsp;every <input id="f-de" type="number" value="5" min="1" title="Dashboard write interval"></div>
+          </div>
+          <div class="tc-row cg-ckpt" id="ckptRow" style="display:none">
+            <span class="cg-ckpt-label">checkpoint</span>
+            <select id="f-checkpoint" title="Available model checkpoints for this run"></select>
+          </div>
+          <div class="tc-row tc-actions">
+            <button onclick="startTraining()" id="btnTrain" class="btn-accent" title="Start training with the current config and parameters above">train</button>
+            <button onclick="watchAiPlay()" id="btnWatch" class="btn-accent hidden" title="Watch the AI play using the selected checkpoint">watch AI play</button>
+            <button onclick="stopTraining()" id="btnStop" class="btn-danger hidden" title="Stop the running training or evaluation job">stop</button>
+          </div>
+        </div>
+        <div class="config-panel" id="configPanel">
+          <div class="section-header" title="All config parameters for the active game. Edit values and they apply on next training run.">config &nbsp;<button onclick="applyConfigEdits()" class="cfg-apply-btn" title="Apply edited config values now">apply</button></div>
           <div class="run-config" id="runConfig"></div>
         </div>
         <section class="episodes-section">
-          <div class="section-header">episodes</div>
+          <div class="section-header" title="Recent training episodes with their scores">episodes</div>
           <div class="episodes-scroll">
             <table>
               <thead><tr><th>ep</th><th>step</th><th>return</th><th>score</th></tr></thead>
@@ -1148,7 +1609,7 @@ def render_ui_html(state: UiState) -> str:
 
       async function startTraining() {{
         try {{
-          const expName = document.getElementById("f-run").value || "ui_train";
+          const expName = (document.getElementById("f-run-name").value || "ui_train").trim();
           await api("/api/train/start", {{
             experiment: expName,
             steps: Number(document.getElementById("f-steps").value),
@@ -1162,19 +1623,138 @@ def render_ui_html(state: UiState) -> str:
       }}
 
       async function stopTraining() {{
+        _stopAiPlay();
         try {{ await api("/api/train/stop"); }} catch (e) {{ setStatus(e.message); }}
         refresh();
       }}
 
-      async function runEval() {{
+      let _aiInterval = null;
+      let _aiTargetEpisodes = 3;
+      let _aiEpisodeCount = 0;
+
+      async function watchAiPlay() {{
         const ckptSel = document.getElementById("f-checkpoint");
-        const payload = {{ episodes: 1 }};
-        if (ckptSel && ckptSel.value) payload.checkpoint = ckptSel.value;
+        if (!ckptSel || !ckptSel.value) {{ setStatus("select a checkpoint first"); return; }}
+        const cg = document.getElementById("controlGroup");
+        const episodes = 3;
+        const payload = {{ episodes, checkpoint: ckptSel.value }};
+        if (cg && cg.dataset.runDir) payload.run_dir = cg.dataset.runDir;
         try {{
-          const res = await api("/api/eval", payload);
-          if (res.result) setStatus("eval done: mean " + fmt(res.result.mean_score) + " best " + fmt(res.result.best_score));
-        }} catch (e) {{ setStatus(e.message); }}
-        refresh();
+          await api("/api/eval/start", payload);
+        }} catch (e) {{ setStatus(e.message); return; }}
+        _aiTargetEpisodes = episodes;
+        _aiEpisodeCount = 0;
+        // Reset the game so we start fresh
+        const iframe = document.getElementById("game");
+        if (iframe) iframe.src = "/game?embed&ts=" + Date.now();
+        setTimeout(() => {{
+          _sendEpisodeStartKey();
+          _aiInterval = setInterval(_aiLoop, 150);
+          _updateEvalUi();
+          setStatus("AI playing live…");
+        }}, 1500);
+      }}
+
+      async function _aiLoop() {{
+        try {{
+          const iframe = document.getElementById("game");
+          if (!iframe) return;
+          const doc = iframe.contentDocument || iframe.contentWindow.document;
+          if (!doc || !doc.body) return;
+
+          const doneEl = doc.querySelector("#status[data-state='done']");
+          const isDone = !!doneEl;
+          const scoreEl = doc.getElementById("score");
+          const score = scoreEl ? (parseFloat(scoreEl.textContent) || 0) : 0;
+
+          const gameCanvas = doc.getElementById("game");
+          if (!gameCanvas || !gameCanvas.getContext) return;
+          const b64 = gameCanvas.toDataURL("image/png").split(",")[1];
+
+          const res = await fetch("/api/eval/step", {{
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify({{frame: b64, done: isDone, score}})
+          }});
+          if (!res.ok) return;
+          const data = await res.json();
+
+          if (data.error) {{
+            _stopAiPlay();
+            setStatus("eval error: " + data.error);
+            return;
+          }}
+
+          if (data.complete) {{
+            _stopAiPlay();
+            refresh();
+            return;
+          }}
+
+          if (isDone) {{
+            _aiEpisodeCount++;
+            _updateEvalUi();
+            // Reset game for next episode.
+            setTimeout(() => {{
+              iframe.src = "/game?embed&ts=" + Date.now();
+              setTimeout(_sendEpisodeStartKey, 500);
+            }}, 300);
+            return;
+          }}
+
+          if (data.action && data.action !== "noop") {{
+            _applyKeyAction(doc, data.action);
+          }}
+        }} catch(_) {{
+          // Network hiccup — skip frame
+        }}
+      }}
+
+      function _applyKeyAction(doc, actionStr) {{
+        if (!actionStr || actionStr === "noop") return;
+        const keyMap = {{"Space": " "}};
+        const keys = actionStr.split("+").map(k => ({{key: keyMap[k] || k, code: k === "Space" ? "Space" : k}}));
+        keys.forEach(({{key, code}}) => doc.dispatchEvent(new KeyboardEvent("keydown", {{key, code, bubbles: true}})));
+        setTimeout(() => keys.slice().reverse().forEach(({{key, code}}) => doc.dispatchEvent(new KeyboardEvent("keyup", {{key, code, bubbles: true}}))), 80);
+      }}
+
+      function _sendEpisodeStartKey() {{
+        const iframe = document.getElementById("game");
+        if (!iframe) return false;
+        const win = iframe.contentWindow;
+        const doc = iframe.contentDocument || (win && win.document);
+        if (!win || !doc || !doc.getElementById("game")) return false;
+        const key = "{state.config.game.reset_key}";
+        const normalized = key === "Space" ? {{key: " ", code: "Space"}} : {{key, code: key.length === 1 ? "Key" + key.toUpperCase() : key}};
+        win.dispatchEvent(new KeyboardEvent("keydown", {{key: normalized.key, code: normalized.code, bubbles: true, cancelable: true}}));
+        doc.dispatchEvent(new KeyboardEvent("keydown", {{key: normalized.key, code: normalized.code, bubbles: true, cancelable: true}}));
+        setTimeout(() => {{
+          win.dispatchEvent(new KeyboardEvent("keyup", {{key: normalized.key, code: normalized.code, bubbles: true, cancelable: true}}));
+          doc.dispatchEvent(new KeyboardEvent("keyup", {{key: normalized.key, code: normalized.code, bubbles: true, cancelable: true}}));
+        }}, 80);
+        return true;
+      }}
+
+      function _stopAiPlay() {{
+        if (_aiInterval !== null) {{ clearInterval(_aiInterval); _aiInterval = null; }}
+        fetch("/api/eval/stop", {{method: "POST"}}).catch(() => {{}});
+        _updateEvalUi();
+      }}
+
+      function _updateEvalUi() {{
+        const gameSection = document.getElementById("gameSection");
+        const gameTitleEl = document.getElementById("gameTitle");
+        const gameStatusEl = document.getElementById("gameStatus");
+        const isEval = _aiInterval !== null;
+        if (gameSection) {{
+          if (isEval) gameSection.classList.add("evaluating");
+          else gameSection.classList.remove("evaluating");
+        }}
+        if (gameTitleEl && isEval) gameTitleEl.textContent = "AI playing";
+        if (gameStatusEl && isEval) {{
+          gameStatusEl.textContent = "AI playing live · ep " + (_aiEpisodeCount + 1) + "/" + _aiTargetEpisodes;
+        }}
+        toggleButtons(isEval);
       }}
 
       function resetGame() {{
@@ -1267,30 +1847,21 @@ def render_ui_html(state: UiState) -> str:
 
       async function loadRunDetail() {{
         const name = document.getElementById("f-run").value;
-        const panel = document.getElementById("runDetail");
-        if (!name) {{ panel.style.display = "none"; return; }}
+        const ckptRow = document.getElementById("ckptRow");
+        if (!name) {{
+          if (ckptRow) ckptRow.style.display = "none";
+          toggleButtons();
+          return;
+        }}
         try {{
           const res = await fetch("/api/run-detail?name=" + encodeURIComponent(name));
           const data = await res.json();
-          panel.style.display = "";
-
-          // Summary
-          const s = data.summary || {{}};
-          const rows = [
-            ["algorithm", s.algorithm || "\\u2014"],
-            ["steps", s.steps || "\\u2014"],
-            ["episodes", s.episodes || "\\u2014"],
-            ["best score", s.best_score != null ? fmt(s.best_score) : "\\u2014"],
-            ["status", s.status || "\\u2014"],
-            ["updates", s.update_count != null ? s.update_count : "\\u2014"],
-          ];
-          document.getElementById("runSummary").innerHTML = rows.map(([k, v]) =>
-            '<div class="rs-item"><div class="rs-label">' + k + '</div><div class="rs-val">' + v + '</div></div>'
-          ).join("");
+          const cg = document.getElementById("controlGroup");
+          if (cg && data.run_dir) cg.dataset.runDir = data.run_dir;
 
           // Checkpoints
           const ckptSel = document.getElementById("f-checkpoint");
-          const prevCkpt = ckptSel.value;
+          const prevCkpt = ckptSel ? ckptSel.value : "";
           ckptSel.innerHTML = "";
           (data.checkpoints || []).forEach(c => {{
             const opt = document.createElement("option");
@@ -1299,32 +1870,9 @@ def render_ui_html(state: UiState) -> str:
             ckptSel.appendChild(opt);
           }});
           if (prevCkpt) ckptSel.value = prevCkpt;
-
-          // Config
-          const configEl = document.getElementById("runConfig");
-          if (data.detail && data.detail.length) {{
-            configEl.innerHTML = data.detail.map(g =>
-              '<div class="cfg-group">' +
-              '<div class="cfg-group-title">' + g.title + '</div>' +
-              g.fields.map(f =>
-                '<div class="cfg-row"><span class="cfg-key" title="' + (f[2] || '') + '">' + f[0] + '</span><span class="cfg-val">' + String(f[1]) + '</span></div>'
-              ).join("") +
-              '</div>'
-            ).join("");
-          }} else {{
-            configEl.innerHTML = '<div style="padding:6px;color:var(--muted);font-size:10px;">no config data</div>';
-          }}
+          if (ckptRow) ckptRow.style.display = (data.checkpoints || []).length ? "" : "none";
+          toggleButtons();
         }} catch {{}}
-      }}
-
-      async function evalCheckpoint() {{
-        const ckptSel = document.getElementById("f-checkpoint");
-        if (!ckptSel || !ckptSel.value) {{ setStatus("select a checkpoint first"); return; }}
-        try {{
-          const res = await api("/api/eval", {{ episodes: 1, checkpoint: ckptSel.value }});
-          if (res.result) setStatus("eval " + ckptSel.value + ": mean " + fmt(res.result.mean_score) + " best " + fmt(res.result.best_score));
-        }} catch (e) {{ setStatus(e.message); }}
-        refresh();
       }}
 
       async function switchConfig() {{
@@ -1380,23 +1928,25 @@ def render_ui_html(state: UiState) -> str:
 
         const statusEl = document.getElementById("headerStatus");
         if (statusEl) {{
-          let txt = status === "idle" ? "" : status;
-          if (j.error) txt += ": " + j.error;
-          statusEl.textContent = txt;
+          statusEl.textContent = j.error ? "error: " + j.error : "";
         }}
 
         // Game status bar
         const gameStatusEl = document.getElementById("gameStatus");
         const gameTitleEl = document.getElementById("gameTitle");
         const gameSection = document.getElementById("gameSection");
+        const e = state.eval || {{}};
         const isTraining = j.running || j.status === "running" || j.status === "starting";
+        const isEvaluating = !isTraining && _aiInterval !== null;
         if (gameSection) {{
           if (isTraining) gameSection.classList.add("training");
           else gameSection.classList.remove("training");
+          if (!isEvaluating) gameSection.classList.remove("evaluating");
         }}
         if (gameTitleEl) {{
           if (isTraining) gameTitleEl.textContent = "training";
-          else if (state.last_eval) gameTitleEl.textContent = "evaluation";
+          else if (isEvaluating) gameTitleEl.textContent = "AI playing";
+          else if (e.result) gameTitleEl.textContent = "eval done";
           else gameTitleEl.textContent = "game view";
         }}
         if (gameStatusEl) {{
@@ -1404,22 +1954,61 @@ def render_ui_html(state: UiState) -> str:
             const ep = s.episodes || l.episode || 0;
             const step = s.steps || l.step || 0;
             gameStatusEl.textContent = "training \\u00b7 ep " + ep + " \\u00b7 step " + step;
+          }} else if (isEvaluating) {{
+            gameStatusEl.textContent = "AI playing live \\u00b7 ep " + (_aiEpisodeCount + 1) + "/" + _aiTargetEpisodes;
           }} else if (j.status === "completed" || j.status === "stopped") {{
             gameStatusEl.textContent = j.status + " \\u00b7 " + (s.steps || 0) + " steps";
           }} else if (j.status === "error") {{
-            gameStatusEl.textContent = "error";
-          }} else if (state.last_eval) {{
-            gameStatusEl.textContent = "eval \\u00b7 mean " + fmt(state.last_eval.mean_score);
+            gameStatusEl.textContent = "error: " + (j.error || "");
+          }} else if (e.status === "error") {{
+            gameStatusEl.textContent = "eval error: " + (e.error || "");
+          }} else if (e.result) {{
+            gameStatusEl.textContent = "eval \\u00b7 mean " + fmt(e.result.mean_score) + " \\u00b7 best " + fmt(e.result.best_score);
           }} else {{
             gameStatusEl.textContent = "manual play";
           }}
         }}
+
+        // Run info bar — single unified status
+        const ribDot = document.getElementById("ribDot");
+        const ribStatus = document.getElementById("ribStatus");
+        const ribDetail = document.getElementById("ribDetail");
+        if (ribDot) {{
+          ribDot.className = "rib-dot";
+          if (isTraining) ribDot.classList.add("running");
+          else if (isEvaluating) ribDot.classList.add("evaluating");
+          else if (j.status === "error" || e.status === "error") ribDot.classList.add("error");
+          else if (j.status === "completed") ribDot.classList.add("stopped");
+          else ribDot.classList.add("idle");
+        }}
+        if (ribStatus) {{
+          if (isTraining) ribStatus.textContent = "training";
+          else if (isEvaluating) ribStatus.textContent = "evaluating";
+          else if (j.status === "completed") ribStatus.textContent = "completed";
+          else if (j.status === "stopped") ribStatus.textContent = "stopped";
+          else if (j.status === "error") ribStatus.textContent = "error";
+          else ribStatus.textContent = "idle";
+        }}
+        if (ribDetail) {{
+          const parts = [];
+          if (s.algorithm) parts.push(s.algorithm);
+          if (s.episodes) parts.push(s.episodes + " eps");
+          if (s.best_score != null) parts.push("best:" + fmt(s.best_score));
+          if (s.steps) parts.push(fmt(s.steps) + " steps");
+          ribDetail.textContent = parts.join(" \\u00b7 ");
+        }}
+
+        // Toggle train/stop/watch buttons (eval is tracked client-side via _aiInterval)
+        if (!isEvaluating) toggleButtons(isTraining);
 
         // Game settings
         const gs = state.game_settings || [];
         document.getElementById("gameSettings").innerHTML = gs.map(([k, v]) =>
           '<span class="sk">' + k + '</span><span class="sv">' + String(v) + '</span>'
         ).join("");
+
+        // Editable config panel (always visible)
+        renderEditableConfig(state.config_detail);
 
         // Metrics
         const items = [
@@ -1434,8 +2023,8 @@ def render_ui_html(state: UiState) -> str:
           ["weight delta", l.weight_delta_norm ?? s.weight_delta_norm],
           ["target syncs", l.target_updates ?? s.target_update_count],
         ];
-        if (state.last_eval && state.last_eval.mean_score != null) {{
-          items.push(["eval mean", state.last_eval.mean_score]);
+        if (state.eval && state.eval.result && state.eval.result.mean_score != null) {{
+          items.push(["eval mean", state.eval.result.mean_score]);
         }}
         document.getElementById("metrics").innerHTML = items.map(([label, value]) =>
           '<div class="metric"><div class="m-label">' + label + '</div><div class="m-val">' + fmt(value) + '</div></div>'
@@ -1453,9 +2042,93 @@ def render_ui_html(state: UiState) -> str:
         ).join("");
       }}
 
+      function renderEditableConfig(groups) {{
+        if (!groups || !groups.length) return;
+        const el = document.getElementById("runConfig");
+        el.innerHTML = groups.map(g => {{
+          const collapsed = g.collapsed || false;
+          let html = '<div class="cfg-group' + (collapsed ? ' cfg-collapsed' : '') + '">';
+          html += '<div class="cfg-group-title">' + g.title + '</div>';
+          html += '<div class="cfg-fields">';
+          g.fields.forEach(f => {{
+            const key = f[0];
+            const val = f[1];
+            const tip = f[2] || '';
+            const meta = f[3] || {{}};
+            const ftype = meta.type || 'text';
+
+            if (ftype === 'readonly') {{
+              html += '<div class="cfg-row"><span class="cfg-key" title="' + tip + '">' + key + '</span><span class="cfg-val">' + String(val) + '</span></div>';
+              return;
+            }}
+            if (ftype === 'bool') {{
+              const checked = val ? ' checked' : '';
+              html += '<div class="cfg-row"><span class="cfg-key" title="' + tip + '">' + key + '</span>' +
+                '<input type="checkbox" class="cfg-checkbox" data-group="' + g.title + '" data-key="' + key + '" data-type="bool"' + checked + ' title="' + tip + '"></div>';
+              return;
+            }}
+            if (ftype === 'select') {{
+              const opts = (meta.options || []).map(o => {{
+                const sel = (String(o) === String(val)) ? ' selected' : '';
+                return '<option value="' + o + '"' + sel + '>' + o + '</option>';
+              }}).join('');
+              html += '<div class="cfg-row"><span class="cfg-key" title="' + tip + '">' + key + '</span>' +
+                '<select class="cfg-select" data-group="' + g.title + '" data-key="' + key + '" data-type="select" title="' + tip + '">' + opts + '</select></div>';
+              return;
+            }}
+            // number or text
+            const numAttrs = ftype === 'number' ? [
+              meta.min !== undefined ? ' min="' + meta.min + '"' : '',
+              meta.max !== undefined ? ' max="' + meta.max + '"' : '',
+              meta.step !== undefined ? ' step="' + meta.step + '"' : ' step="1"',
+              ' data-type="number"'
+            ].join('') : ' data-type="text"';
+            html += '<div class="cfg-row"><span class="cfg-key" title="' + tip + '">' + key + '</span>' +
+              '<input class="cfg-input" type="' + (ftype === 'number' ? 'number' : 'text') + '"' + numAttrs +
+              ' data-group="' + g.title + '" data-key="' + key + '" value="' + String(val).replace(/"/g, '&quot;') + '" title="' + tip + '"></div>';
+          }});
+          html += '</div></div>';
+          return html;
+        }}).join("");
+      }}
+
+      async function applyConfigEdits() {{
+        const overrides = [];
+        document.querySelectorAll('#runConfig .cfg-input, #runConfig .cfg-select, #runConfig .cfg-checkbox').forEach(el => {{
+          let value;
+          if (el.dataset.type === 'bool') {{
+            value = el.checked ? 'true' : 'false';
+          }} else {{
+            value = el.value;
+          }}
+          overrides.push({{
+            group: el.dataset.group,
+            key: el.dataset.key,
+            value: value,
+          }});
+        }});
+        if (!overrides.length) return;
+        try {{
+          await api("/api/update-config", {{ overrides }});
+          setStatus("config applied");
+          refresh();
+        }} catch (e) {{ setStatus(e.message); }}
+      }}
+
       function setStatus(msg) {{
         const el = document.getElementById("headerStatus");
         if (el) el.textContent = msg;
+      }}
+
+      function toggleButtons(busy) {{
+        const btnTrain = document.getElementById("btnTrain");
+        const btnStop = document.getElementById("btnStop");
+        const btnWatch = document.getElementById("btnWatch");
+        const ckptSel = document.getElementById("f-checkpoint");
+        const hasCkpt = ckptSel && ckptSel.options.length > 0;
+        if (btnTrain) btnTrain.classList.toggle("hidden", !!busy);
+        if (btnStop) btnStop.classList.toggle("hidden", !busy);
+        if (btnWatch) btnWatch.classList.toggle("hidden", !!busy || !hasCkpt);
       }}
 
       function fmt(v) {{
@@ -1561,6 +2234,12 @@ def render_ui_html(state: UiState) -> str:
       refresh();
       loadRuns();
       loadConfigs();
+      // Toggle config group collapse via event delegation (bind once)
+      document.getElementById("runConfig").addEventListener("click", function(e) {{
+        if (e.target.classList.contains("cfg-group-title")) {{
+          e.target.parentElement.classList.toggle("cfg-collapsed");
+        }}
+      }});
       setInterval(refresh, 1000);
       setInterval(pollGameStats, 500);
       setInterval(pollFrame, 500);
@@ -1568,6 +2247,38 @@ def render_ui_html(state: UiState) -> str:
   </body>
 </html>
 """
+
+
+def _preprocess_canvas_frame(png_bytes: bytes, config: ProjectConfig) -> Any:
+    """Decode a raw PNG (from canvas.toDataURL) and preprocess to (C, H, W) uint8 array."""
+    import numpy as np
+    from PIL import Image
+
+    from jepa_rl.envs.wrappers import apply_crop, apply_normalize
+
+    obs_cfg = config.observation
+    image = Image.open(io.BytesIO(png_bytes))
+    mode = "L" if obs_cfg.grayscale else "RGB"
+    image = image.convert(mode)
+
+    array = np.asarray(image, dtype=np.uint8)
+    array = array[None, :, :] if obs_cfg.grayscale else array.transpose(2, 0, 1)
+
+    array = apply_crop(array, top=obs_cfg.crop_top, bottom=obs_cfg.crop_bottom, left=obs_cfg.crop_left, right=obs_cfg.crop_right)
+
+    if array.shape[0] == 1:
+        image = Image.fromarray(array[0], mode="L")
+    else:
+        image = Image.fromarray(array.transpose(1, 2, 0), mode="RGB")
+    image = image.resize((obs_cfg.width, obs_cfg.height), Image.Resampling.BILINEAR)
+
+    array = np.asarray(image, dtype=np.uint8)
+    array = array[None, :, :] if obs_cfg.grayscale else array.transpose(2, 0, 1)
+
+    if obs_cfg.normalize:
+        array = apply_normalize(array)
+
+    return array  # (C, H, W)
 
 
 def _read_json(path: Path) -> dict[str, Any]:

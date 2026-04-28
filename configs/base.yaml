@@ -118,7 +118,7 @@ agent:
 
 replay:
   capacity: 1000000
-  prioritized: true
+  prioritized: false
   priority_alpha: 0.6
   priority_beta_start: 0.4
   priority_beta_end: 1.0

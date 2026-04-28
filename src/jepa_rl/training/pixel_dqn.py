@@ -312,7 +312,7 @@ def train_dqn(
 
                 obs = result.observation
                 if screenshot_path is not None:
-                    _save_obs_frame(obs.data, screenshot_path)
+                    _save_render_frame(env, obs.data, screenshot_path)
                 if result.done:
                     if episode_score > best_score:
                         best_score = episode_score
@@ -460,6 +460,7 @@ def evaluate_dqn(
     headless: bool | None = None,
     env_factory: Callable[[ProjectConfig, bool | None], BrowserGameEnv] | None = None,
     run_dir: Path | None = None,
+    screenshot_path: Path | None = None,
 ) -> dict[str, Any]:
     if episodes <= 0:
         raise ValueError("episodes must be positive")
@@ -494,6 +495,8 @@ def evaluate_dqn(
                 episode_return += result.reward
                 score = result.score
                 obs = result.observation
+                if screenshot_path is not None:
+                    _save_render_frame(env, obs.data, screenshot_path)
                 if result.done:
                     break
             scores.append(score)
@@ -510,22 +513,32 @@ def evaluate_dqn(
     }
 
 
+def _save_render_frame(env: BrowserGameEnv, fallback_data: np.ndarray, path: Path) -> None:
+    try:
+        from PIL import Image as PILImage
+
+        frame = env.render_video_frame()
+        PILImage.fromarray(frame.astype(np.uint8), "RGB").save(path)
+    except Exception:  # noqa: BLE001
+        _save_obs_frame(fallback_data, path)
+
+
 def _save_obs_frame(data: np.ndarray, path: Path) -> None:
     try:
         from PIL import Image as PILImage
 
-        arr = data
+        arr = data  # (C, H, W) channel-first from PlaywrightBrowserGameEnv
         if arr.ndim == 3:
-            ch = arr.shape[2]
-            if ch <= 2:
-                frame: np.ndarray = arr[:, :, ch - 1]
-            elif ch == 3:
-                frame = arr
+            c = arr.shape[0]
+            if c >= 3:
+                frame: np.ndarray = arr[-3:].transpose(1, 2, 0)  # (3,H,W) → (H,W,3)
+                mode = "RGB"
             else:
-                frame = arr[:, :, -3:]
+                frame = arr[-1]  # (H,W) last stacked grayscale frame
+                mode = "L"
         else:
             frame = arr
-        mode = "L" if frame.ndim == 2 else "RGB"
+            mode = "L"
         PILImage.fromarray(frame.astype(np.uint8), mode).save(path)
     except Exception:  # noqa: BLE001
         pass

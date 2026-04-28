@@ -39,3 +39,6 @@ docs/*.pdf
 .idea/
 .vscode/
 
+# Frontend
+ui/node_modules/
+

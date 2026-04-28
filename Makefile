@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: help sync sync-all lock test lint format validate-config smoke clean
+.PHONY: help sync sync-all lock test lint format validate-config smoke clean ui-dev ui-build
 
 help:
 	@echo "Targets:"
@@ -13,6 +13,8 @@ help:
 	@echo "  validate-config  Validate the starter Breakout config"
 	@echo "  smoke            Run config validation and unit tests"
 	@echo "  clean            Remove .venv and build artifacts"
+	@echo "  ui-dev           Start Vue dev server"
+	@echo "  ui-build         Build Vue app to ui/dist/"
 
 sync:
 	$(UV) sync
@@ -40,3 +42,13 @@ smoke: validate-config test
 
 clean:
 	rm -rf .venv build dist *.egg-info src/*.egg-info
+
+ui-dev:
+	@lsof -ti:8765 | xargs kill 2>/dev/null || true; \
+	trap 'kill $$SERVER_PID 2>/dev/null' EXIT; \
+	$(UV) run jepa-rl ui --no-open & SERVER_PID=$$!; \
+	sleep 1; \
+	cd ui && npm run dev
+
+ui-build:
+	cd ui && npm install && npm run build
