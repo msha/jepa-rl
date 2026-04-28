@@ -1,0 +1,312 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - 'generic "JEPA-RL: Joint-Embedding Predictive Architecture for Reinforcement Learning" [ref=e4]': jepa-rl
+    - generic "Current active run directory" [ref=e6]: ui_train
+  - generic "Select a game configuration to load" [ref=e8]:
+    - text: game
+    - combobox "Available game configs in configs/games/" [ref=e9]:
+      - option "breakout" [selected]
+      - option "breakout_tiny"
+  - main [ref=e10]:
+    - generic [ref=e11]:
+      - generic "Live training metrics updated every refresh" [ref=e12]:
+        - generic [ref=e13]:
+          - generic [ref=e14]: steps
+          - generic [ref=e15]: "500.00"
+        - generic [ref=e16]:
+          - generic [ref=e17]: episodes
+          - generic [ref=e18]: "16.00"
+        - generic [ref=e19]:
+          - generic [ref=e20]: best score
+          - generic [ref=e21]: "82.00"
+        - generic [ref=e22]:
+          - generic [ref=e23]: updates
+          - generic [ref=e24]: "121.00"
+        - generic [ref=e25]:
+          - generic [ref=e26]: replay
+          - generic [ref=e27]: "500.00"
+        - generic [ref=e28]:
+          - generic [ref=e29]: weight delta
+          - generic [ref=e30]: "0.1217"
+        - generic [ref=e31]:
+          - generic [ref=e32]: target syncs
+          - generic [ref=e33]: "0"
+      - generic [ref=e34]:
+        - generic [ref=e36]:
+          - generic [ref=e37]: score
+          - generic [ref=e38]: "25.00"
+        - generic [ref=e41]:
+          - generic [ref=e42]: loss
+          - generic [ref=e43]: "0.9973"
+        - generic [ref=e46]:
+          - generic [ref=e47]: epsilon
+          - generic [ref=e48]: "0.9991"
+        - generic [ref=e51]:
+          - generic [ref=e52]: td error
+          - generic [ref=e53]: "1.2988"
+      - generic [ref=e55]:
+        - generic "Recent training episodes with their scores" [ref=e56]: episodes
+        - table [ref=e58]:
+          - rowgroup [ref=e59]:
+            - row "ep step return score" [ref=e60]:
+              - columnheader "ep" [ref=e61]
+              - columnheader "step" [ref=e62]
+              - columnheader "return" [ref=e63]
+              - columnheader "score" [ref=e64]
+          - rowgroup [ref=e65]:
+            - row "15 480 77.00 77.00" [ref=e66]:
+              - cell "15" [ref=e67]
+              - cell "480" [ref=e68]
+              - cell "77.00" [ref=e69]
+              - cell "77.00" [ref=e70]
+            - row "14 406 18.00 18.00" [ref=e71]:
+              - cell "14" [ref=e72]
+              - cell "406" [ref=e73]
+              - cell "18.00" [ref=e74]
+              - cell "18.00" [ref=e75]
+            - row "13 387 25.00 25.00" [ref=e76]:
+              - cell "13" [ref=e77]
+              - cell "387" [ref=e78]
+              - cell "25.00" [ref=e79]
+              - cell "25.00" [ref=e80]
+            - row "12 353 33.00 33.00" [ref=e81]:
+              - cell "12" [ref=e82]
+              - cell "353" [ref=e83]
+              - cell "33.00" [ref=e84]
+              - cell "33.00" [ref=e85]
+            - row "11 315 26.00 26.00" [ref=e86]:
+              - cell "11" [ref=e87]
+              - cell "315" [ref=e88]
+              - cell "26.00" [ref=e89]
+              - cell "26.00" [ref=e90]
+            - row "10 286 25.00 25.00" [ref=e91]:
+              - cell "10" [ref=e92]
+              - cell "286" [ref=e93]
+              - cell "25.00" [ref=e94]
+              - cell "25.00" [ref=e95]
+            - row "9 262 18.00 18.00" [ref=e96]:
+              - cell "9" [ref=e97]
+              - cell "262" [ref=e98]
+              - cell "18.00" [ref=e99]
+              - cell "18.00" [ref=e100]
+            - row "8 246 26.00 26.00" [ref=e101]:
+              - cell "8" [ref=e102]
+              - cell "246" [ref=e103]
+              - cell "26.00" [ref=e104]
+              - cell "26.00" [ref=e105]
+            - row "7 220 32.00 32.00" [ref=e106]:
+              - cell "7" [ref=e107]
+              - cell "220" [ref=e108]
+              - cell "32.00" [ref=e109]
+              - cell "32.00" [ref=e110]
+            - row "6 186 26.00 26.00" [ref=e111]:
+              - cell "6" [ref=e112]
+              - cell "186" [ref=e113]
+              - cell "26.00" [ref=e114]
+              - cell "26.00" [ref=e115]
+            - row "5 156 18.00 18.00" [ref=e116]:
+              - cell "5" [ref=e117]
+              - cell "156" [ref=e118]
+              - cell "18.00" [ref=e119]
+              - cell "18.00" [ref=e120]
+            - row "4 134 18.00 18.00" [ref=e121]:
+              - cell "4" [ref=e122]
+              - cell "134" [ref=e123]
+              - cell "18.00" [ref=e124]
+              - cell "18.00" [ref=e125]
+            - row "3 111 42.00 42.00" [ref=e126]:
+              - cell "3" [ref=e127]
+              - cell "111" [ref=e128]
+              - cell "42.00" [ref=e129]
+              - cell "42.00" [ref=e130]
+            - row "2 86 19.00 19.00" [ref=e131]:
+              - cell "2" [ref=e132]
+              - cell "86" [ref=e133]
+              - cell "19.00" [ref=e134]
+              - cell "19.00" [ref=e135]
+            - row "1 66 31.00 31.00" [ref=e136]:
+              - cell "1" [ref=e137]
+              - cell "66" [ref=e138]
+              - cell "31.00" [ref=e139]
+              - cell "31.00" [ref=e140]
+            - row "0 40 82.00 82.00" [ref=e141]:
+              - cell "0" [ref=e142]
+              - cell "40" [ref=e143]
+              - cell "82.00" [ref=e144]
+              - cell "82.00" [ref=e145]
+    - generic [ref=e146]:
+      - generic [ref=e147]:
+        - generic [ref=e148]:
+          - generic [ref=e149]: game view
+          - generic [ref=e150]: manual play
+          - button "hide" [ref=e151] [cursor=pointer]
+        - iframe [active] [ref=e153]:
+          - main [ref=f1e2]:
+            - generic [ref=f1e3]:
+              - heading "JEPA-RL Breakout" [level=1] [ref=f1e4]
+              - generic [ref=f1e5]:
+                - generic [ref=f1e6]:
+                  - text: Score
+                  - strong [ref=f1e7]: "0"
+                - generic [ref=f1e8]:
+                  - text: Lives
+                  - strong [ref=f1e9]: "3"
+            - generic [ref=f1e11]: Playing
+        - generic [ref=e154]:
+          - generic [ref=e155]: play
+          - button "◀ left" [ref=e156] [cursor=pointer]
+          - button "serve" [ref=e157] [cursor=pointer]
+          - button "right ▶" [ref=e158] [cursor=pointer]
+          - button "reset" [ref=e159] [cursor=pointer]
+      - generic "Game configuration settings for the active config" [ref=e160]:
+        - generic [ref=e161]: resolution
+        - generic [ref=e162]: 160x120
+        - generic [ref=e163]: fps
+        - generic [ref=e164]: "30"
+        - generic [ref=e165]: action repeat
+        - generic [ref=e166]: "4"
+        - generic [ref=e167]: obs mode
+        - generic [ref=e168]: screenshot
+        - generic [ref=e169]: frame stack
+        - generic [ref=e170]: "4"
+        - generic [ref=e171]: actions
+        - generic [ref=e172]: noop, ArrowLeft, ArrowRight, Space, ArrowLeft+Space, ArrowRight+Space
+        - generic [ref=e173]: max steps
+        - generic [ref=e174]: "1000"
+    - generic [ref=e175]:
+      - combobox "Select a past training run to view its details" [ref=e177]:
+        - option "select run..." [selected]
+        - option "ui_train · pixel_dqn · best:82.00 · 500 steps"
+        - option "breakout_tiny · pixel_dqn · best:318.00 · 500 steps"
+        - option "train · pixel_dqn · best:293.00 · 500 steps"
+        - option "eval"
+      - generic "Current run status and key metrics" [ref=e178]:
+        - generic [ref=e180]: idle
+        - generic [ref=e181]: pixel_dqn · 16 eps · best:82.00 · 500.00 steps
+      - generic [ref=e182]:
+        - generic [ref=e183]:
+          - generic "Name for the new training run" [ref=e184]:
+            - text: name
+            - textbox "Run name for new training" [ref=e185]: ui_train
+          - generic "Total environment steps" [ref=e186]:
+            - text: steps
+            - spinbutton "Number of game steps to train" [ref=e187]: "500"
+          - generic "Steps before model updates begin" [ref=e188]:
+            - text: warmup
+            - spinbutton "Warmup steps" [ref=e189]: "0"
+        - generic [ref=e190]:
+          - generic "Minibatch size" [ref=e191]:
+            - text: batch
+            - spinbutton "Batch size override" [ref=e192]: "16"
+          - generic "Rewrite dashboard every N steps" [ref=e193]:
+            - text: log every
+            - spinbutton "Dashboard write interval" [ref=e194]: "5"
+        - generic [ref=e195]:
+          - generic [ref=e196]: checkpoint
+          - combobox "Available model checkpoints" [ref=e197]:
+            - option "best.pt" [selected]
+            - option "latest.pt"
+        - generic [ref=e198]:
+          - button "train" [ref=e199] [cursor=pointer]
+          - button "watch AI play" [ref=e200] [cursor=pointer]
+      - generic [ref=e201]:
+        - generic "All config parameters for the active game" [ref=e202]:
+          - text: config
+          - button "apply" [ref=e203] [cursor=pointer]
+        - generic [ref=e204]:
+          - generic [ref=e205]:
+            - generic [ref=e206] [cursor=pointer]: ▾experiment
+            - generic [ref=e207]:
+              - generic [ref=e208]:
+                - generic "Run identifier" [ref=e209]: name
+                - textbox "Run identifier" [ref=e210]: breakout_jepa_dqn_small
+              - generic [ref=e211]:
+                - generic "Compute device" [ref=e212]: device
+                - combobox "Compute device" [ref=e213] [cursor=pointer]:
+                  - option "cpu"
+                  - option "auto" [selected]
+                  - option "mps"
+                  - option "cuda"
+              - generic [ref=e214]:
+                - generic "Numeric precision" [ref=e215]: precision
+                - combobox "Numeric precision" [ref=e216] [cursor=pointer]:
+                  - option "fp32" [selected]
+                  - option "fp16"
+                  - option "bf16"
+              - generic [ref=e217]:
+                - generic "Random seed" [ref=e218]: seed
+                - spinbutton "Random seed" [ref=e219]: "42"
+          - generic [ref=e220]:
+            - generic [ref=e221] [cursor=pointer]: ▾agent
+            - generic [ref=e222]:
+              - generic [ref=e223]:
+                - generic "RL algorithm" [ref=e224]: algorithm
+                - combobox "RL algorithm" [ref=e225] [cursor=pointer]:
+                  - option "dqn" [selected]
+                  - option "linear_q"
+              - generic [ref=e226]:
+                - generic "Discount factor" [ref=e227]: gamma
+                - spinbutton "Discount factor" [ref=e228]: "0.997"
+              - generic [ref=e229]:
+                - generic "N-step return" [ref=e230]: n_step
+                - spinbutton "N-step return" [ref=e231]: "5"
+              - generic [ref=e232]:
+                - generic "Batch size" [ref=e233]: batch_size
+                - spinbutton "Batch size" [ref=e234]: "256"
+              - generic [ref=e235]:
+                - generic "Steps before learning" [ref=e236]: learning_starts
+                - spinbutton "Steps before learning" [ref=e237]: "10000"
+              - generic [ref=e238]:
+                - generic "Train every N steps" [ref=e239]: train_every
+                - spinbutton "Train every N steps" [ref=e240]: "4"
+              - generic [ref=e241]:
+                - generic "Target sync interval" [ref=e242]: target_update_interval
+                - spinbutton "Target sync interval" [ref=e243]: "2000"
+          - generic [ref=e244]:
+            - generic [ref=e245] [cursor=pointer]: ▾exploration
+            - generic [ref=e246]:
+              - generic [ref=e247]:
+                - generic "Initial epsilon" [ref=e248]: epsilon_start
+                - spinbutton "Initial epsilon" [ref=e249]: "1"
+              - generic [ref=e250]:
+                - generic "Final epsilon" [ref=e251]: epsilon_end
+                - spinbutton "Final epsilon" [ref=e252]: "0.05"
+              - generic [ref=e253]:
+                - generic "Decay steps" [ref=e254]: epsilon_decay_steps
+                - spinbutton "Decay steps" [ref=e255]: "500000"
+          - generic [ref=e256]:
+            - generic [ref=e257] [cursor=pointer]: ▾replay
+            - generic [ref=e258]:
+              - generic [ref=e259]:
+                - generic "Buffer capacity" [ref=e260]: capacity
+                - spinbutton "Buffer capacity" [ref=e261]: "1000000"
+              - generic [ref=e262]:
+                - generic "Prioritized replay" [ref=e263]: prioritized
+                - checkbox "Prioritized replay" [ref=e264] [cursor=pointer]
+              - generic [ref=e265]:
+                - generic "Sequence length" [ref=e266]: sequence_length
+                - spinbutton "Sequence length" [ref=e267]: "16"
+          - generic [ref=e268]:
+            - generic [ref=e269] [cursor=pointer]: ▾world_model
+            - generic [ref=e270]:
+              - generic [ref=e271]:
+                - generic "Use JEPA world model" [ref=e272]: enabled
+                - checkbox "Use JEPA world model" [checked] [ref=e273] [cursor=pointer]
+              - generic [ref=e274]:
+                - generic "Latent dim" [ref=e275]: latent_dim
+                - spinbutton "Latent dim" [ref=e276]: "512"
+              - generic [ref=e277]:
+                - generic "Encoder" [ref=e278]: encoder
+                - generic [ref=e279]: conv
+              - generic [ref=e280]:
+                - generic "Predictor" [ref=e281]: predictor
+                - generic [ref=e282]: transformer
+              - generic [ref=e283]:
+                - generic "Horizons" [ref=e284]: horizons
+                - generic [ref=e285]: 1,2,4,8
+              - generic [ref=e286]:
+                - generic "Loss function" [ref=e287]: loss
+                - generic [ref=e288]: cosine_mse
+              - generic [ref=e289]:
+                - generic "EMA tau schedule" [ref=e290]: ema_tau
+                - generic [ref=e291]: 0.996–0.9999

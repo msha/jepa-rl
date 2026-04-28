@@ -35,7 +35,7 @@ Implemented now:
 - `jepa-rl open-game` to launch the configured game in visible Chromium.
 - `jepa-rl ml-smoke` to verify the current linear Q learner reduces synthetic loss.
 - `jepa-rl dashboard --run ...` to generate/open the run dashboard HTML.
-- `jepa-rl ui --config ...` to run the live local control panel.
+- `jepa-rl ui --config ...` to run the live local control panel. The UI is a Vue 3 + Vite SPA (`ui/` directory) served from the Python server. Build with `make ui-build`, dev with `make ui-dev`.
 - `jepa-rl collect-random` for the local Breakout smoke game.
 - `jepa-rl train` for the current NumPy linear pixel-Q smoke model.
 - `jepa-rl eval` for the current `.npz` smoke-model checkpoints.
@@ -149,6 +149,7 @@ The Phase 0 scaffold is in place. The active toolchain is:
 - pytest, ruff via the `dev` dependency group
 - PyYAML for config loading
 - Optional extras (not installed by default): `browser` (Playwright + Pillow + OpenCV), `train` (NumPy + PyTorch), `all`
+- Vue 3 + Vite + Pinia frontend in `ui/` (Node.js, built via `make ui-build`)
 - TensorBoard / W&B / MLflow are deferred to Phase 4 and will sit behind configuration flags
 - mypy may be added once the package structure stabilises
 
@@ -159,6 +160,8 @@ uv sync                  # dev env from uv.lock
 uv sync --all-extras     # plus browser/train/config
 uv run jepa-rl --help
 uv run pytest
+make ui-build            # build Vue frontend
+make ui-dev              # start Python + Vite dev servers
 ```
 
 CI installs with `uv sync --frozen` to guarantee `uv.lock` parity. Do not regenerate the lock unintentionally — run `uv lock` (or `make lock`) only when dependencies actually change, then commit the resulting `uv.lock` diff.

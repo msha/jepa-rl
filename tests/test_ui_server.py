@@ -1,38 +1,14 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from jepa_rl.ui.server import (
     EvalJob,
     UiState,
     _get_defaults,
     build_state_payload,
-    render_ui_html,
 )
 from jepa_rl.utils.config import load_config
-
-
-def test_render_ui_html_contains_game_and_training_controls() -> None:
-    config = load_config("configs/games/breakout.yaml")
-    state = UiState(
-        config_path=config.__class__.__name__,
-        config=config,
-        experiment="ui_test",
-        default_steps=100,
-        learning_starts=0,
-        batch_size=8,
-        dashboard_every=5,
-        run_dir=Path(config.experiment.output_dir) / "ui_test",
-    )
-
-    html = render_ui_html(state)
-
-    assert 'src="/game' in html
-    assert "startTraining" in html
-    assert "stopTraining" in html
-    assert ".game-section.training .game-body { display: block; }" in html
-    assert "loss" in html
 
 
 def test_build_state_payload_reads_metrics(tmp_path) -> None:
@@ -69,6 +45,7 @@ def test_build_state_payload_reads_metrics(tmp_path) -> None:
 
     assert payload["summary"]["best_score"] == 4
     assert payload["latest_step"]["score"] == 1
+    assert payload["config"]["action_keys"] == list(config.actions.keys)
     assert len(payload["episodes"]) == 1
 
 

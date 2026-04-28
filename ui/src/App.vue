@@ -21,7 +21,7 @@ const training = useTrainingStore()
 const config = useConfigStore()
 const runs = useRunsStore()
 
-usePolling(() => training.refresh(), 1000)
+usePolling(() => training.refresh(), 300)
 usePolling(() => runs.loadRuns(), 5000)
 
 onMounted(() => {
@@ -43,9 +43,16 @@ onMounted(() => {
         <ChartPanel label="epsilon" :points="training.chartPoints('epsilon')" color="#bfa03e" />
         <ChartPanel label="td error" :points="training.chartPoints('td')" color="#b9524c" />
       </div>
+      <EpisodesTable :episodes="training.episodes" />
     </div>
     <div class="col col-center">
-      <GameSection :job="training.job" :eval-job="training.evalJob" :reset-key="training.resetKey" />
+      <GameSection
+        :job="training.job"
+        :eval-job="training.evalJob"
+        :reset-key="training.resetKey"
+        :action-keys="training.actionKeys"
+        :steps="training.steps"
+      />
       <GameSettings :settings="training.gameSettings" />
     </div>
     <div class="col col-right">
@@ -53,7 +60,6 @@ onMounted(() => {
       <RunInfoBar :job="training.job" :eval-job="training.evalJob" :summary="training.summary" :latest-step="training.latestStep" />
       <TrainControls />
       <ConfigPanel />
-      <EpisodesTable :episodes="training.episodes" />
     </div>
   </main>
 </template>

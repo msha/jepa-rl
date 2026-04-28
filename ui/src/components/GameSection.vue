@@ -7,6 +7,8 @@ const props = defineProps<{
   job: Job | null
   evalJob: EvalJob | null
   resetKey: string
+  actionKeys: string[]
+  steps: Record<string, unknown>[]
 }>()
 
 const isTraining = computed(() => !!props.job?.running || props.job?.status === 'running' || props.job?.status === 'starting')
@@ -20,6 +22,8 @@ const evalClientError = ref('')
 
 let aiInterval: ReturnType<typeof window.setInterval> | null = null
 let aiStepInFlight = false
+let lastMirroredTrainingStep = 0
+let trainingPlaybackTimers: ReturnType<typeof window.setTimeout>[] = []
 
 const gameTitle = computed(() => {
   if (isTraining.value) return 'training'
@@ -87,8 +91,20 @@ watch(isEvaluating, active => {
   }
 }, { immediate: true })
 
+watch(isTraining, active => {
+  clearTrainingPlayback()
+  if (active) {
+    lastMirroredTrainingStep = 0
+    reloadGame()
+    scheduleEpisodeStart()
+  }
+}, { immediate: true })
+
+watch(() => props.steps, mirrorTrainingSteps, { deep: true })
+
 onBeforeUnmount(() => {
   stopAiLoop(true)
+  clearTrainingPlayback()
 })
 
 function toggleGame() {
@@ -135,6 +151,43 @@ function stopAiLoop(notifyServer: boolean) {
   if (notifyServer) {
     fetch('/api/eval/stop', { method: 'POST' }).catch(() => {})
   }
+}
+
+function mirrorTrainingSteps() {
+  if (!isTraining.value || !props.actionKeys.length) return
+  const unseen = props.steps
+    .filter(step => typeof step.step === 'number' && step.step > lastMirroredTrainingStep)
+    .sort((a, b) => Number(a.step) - Number(b.step))
+  if (!unseen.length) return
+
+  const toReplay = unseen.length > 24 ? unseen.slice(-24) : unseen
+  lastMirroredTrainingStep = Number(unseen[unseen.length - 1].step)
+  toReplay.forEach((step, index) => {
+    const timer = window.setTimeout(() => mirrorTrainingStep(step), index * 70)
+    trainingPlaybackTimers.push(timer)
+  })
+}
+
+function mirrorTrainingStep(step: Record<string, unknown>) {
+  if (!isTraining.value) return
+  if (step.done) {
+    reloadGame()
+    scheduleEpisodeStart()
+    return
+  }
+  const actionIndex = typeof step.action === 'number' ? step.action : Number(step.action)
+  if (!Number.isFinite(actionIndex)) return
+  const action = props.actionKeys[actionIndex]
+  if (!action || action === 'noop') return
+  const win = gameFrame.value?.contentWindow
+  const doc = gameFrame.value?.contentDocument
+  if (!win || !doc) return
+  applyKeyAction(win, doc, action)
+}
+
+function clearTrainingPlayback() {
+  trainingPlaybackTimers.forEach(timer => window.clearTimeout(timer))
+  trainingPlaybackTimers = []
 }
 
 async function runAiStep() {
@@ -191,7 +244,7 @@ function reloadGame() {
 
 function scheduleEpisodeStart(attempt = 0) {
   window.setTimeout(() => {
-    if (!isEvaluating.value) return
+    if (!isEvaluating.value && !isTraining.value) return
     if (sendConfiguredKey(props.resetKey || 'Space')) return
     if (attempt < 10) scheduleEpisodeStart(attempt + 1)
   }, attempt === 0 ? 500 : 150)

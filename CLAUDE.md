@@ -34,7 +34,7 @@ Implemented now:
 - `jepa-rl init-run`.
 - `jepa-rl open-game` to launch the configured game in visible Chromium.
 - `jepa-rl ml-smoke` to verify the current linear Q learner reduces synthetic loss.
-- `jepa-rl ui` to run the live training dashboard and control panel (accepts `--config`, `--run`, or auto-discovers `configs/base.yaml` with no args).
+- `jepa-rl ui` to run the live training dashboard and control panel (accepts `--config`, `--run`, or auto-discovers `configs/base.yaml` with no args). The UI is a Vue 3 + Vite SPA in `ui/` served from the Python server.
 - `jepa-rl collect-random` for the local Breakout smoke game.
 - `jepa-rl train` for the current NumPy linear pixel-Q smoke model.
 - `jepa-rl eval` for the current `.npz` smoke-model checkpoints.
@@ -151,8 +151,9 @@ resolves to MPS via `models/device.py::resolve_torch_device`. Notes:
 Every training and evaluation feature must be accessible from both the CLI and the `jepa-rl ui` web interface. When adding a new capability:
 
 1. **Wire it in `src/jepa_rl/cli.py`** as a subcommand or flag.
-2. **Wire it in `src/jepa_rl/ui/server.py`** — expose it through the existing `/api/train/start`, `/api/eval`, or a new POST endpoint. Display its result in the dashboard HTML.
-3. The UI dispatches training and evaluation based on `config.agent.algorithm`, exactly like the CLI. Adding a new algorithm requires updating both `_training_worker` and `_handle_eval` in `server.py`.
+2. **Wire it in `src/jepa_rl/ui/server.py`** — expose it through the existing `/api/train/start`, `/api/eval`, or a new POST endpoint.
+3. **Wire it in the Vue frontend** (`ui/src/`) — add API calls in the relevant Pinia store, update or add components in `ui/src/components/`. Run `make ui-build` to rebuild.
+4. The UI dispatches training and evaluation based on `config.agent.algorithm`, exactly like the CLI. Adding a new algorithm requires updating both `_training_worker` and the handler in `server.py`, plus the corresponding Vue store/component.
 
 Current UI capabilities (must stay in sync with CLI):
 
@@ -176,6 +177,7 @@ Current UI capabilities (must stay in sync with CLI):
 - NumPy, Pillow, OpenCV (in `train` / `browser` extras)
 - Pydantic or OmegaConf for typed config (currently using a hand-rolled validator + PyYAML)
 - pytest, ruff (in the `dev` dependency group; mypy may be added later)
+- Vue 3 + Vite + Pinia (in `ui/`; build with `make ui-build`, dev with `make ui-dev`)
 - TensorBoard / W&B / MLflow for experiment logging (Phase 4)
 
 Common commands:
@@ -187,6 +189,8 @@ uv run jepa-rl <subcommand>                      # CLI
 uv run pytest                                    # tests
 uv run ruff check src tests                      # lint
 uv lock                                          # refresh the lockfile
+make ui-build                                    # build Vue frontend to ui/dist/
+make ui-dev                                      # start both Python + Vite dev servers
 ```
 
 ## When You're Asked to Implement Something

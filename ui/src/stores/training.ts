@@ -34,6 +34,7 @@ export const useTrainingStore = defineStore('training', () => {
   const configDetail = ref<ConfigGroup[]>([])
   const runDir = ref<{ name: string; dir: string; has_checkpoint: boolean; checkpoints: string[] } | null>(null)
   const resetKey = ref('Space')
+  const actionKeys = ref<string[]>([])
 
   const isTraining = computed(() => !!job.value?.running || job.value?.status === 'running' || job.value?.status === 'starting')
   const isEvaluating = computed(() => !isTraining.value && (!!evalJob.value?.running || evalJob.value?.status === 'running'))
@@ -63,14 +64,15 @@ export const useTrainingStore = defineStore('training', () => {
       gameSettings.value = (data.game_settings as [string, unknown][]) || []
       configDetail.value = (data.config_detail as ConfigGroup[]) || []
       runDir.value = data.run as { name: string; dir: string; has_checkpoint: boolean; checkpoints: string[] } | null
-      const cfg = data.config as { reset_key?: string } | undefined
+      const cfg = data.config as { reset_key?: string; action_keys?: string[] } | undefined
       resetKey.value = cfg?.reset_key || 'Space'
+      actionKeys.value = cfg?.action_keys || []
     } catch { /* swallow */ }
   }
 
   const evalResult = computed(() => evalJob.value?.result ?? null)
 
-  return { summary, latestStep, steps, episodes, job, evalJob, evalResult, gameSettings, configDetail, runDir, resetKey, isTraining, isEvaluating, headerStatus, chartPoints, refresh }
+  return { summary, latestStep, steps, episodes, job, evalJob, evalResult, gameSettings, configDetail, runDir, resetKey, actionKeys, isTraining, isEvaluating, headerStatus, chartPoints, refresh }
 })
 
 export interface ConfigGroup {

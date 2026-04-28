@@ -149,7 +149,8 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             elif parsed.path == "/api/state":
                 self._send_json(build_state_payload(state))
             elif parsed.path == "/api/runs":
-                self._send_json(list_runs(state))
+                qs = parse_qs(parsed.query)
+                self._send_json(list_runs(state, include_smoke="true" in qs.get("smoke", [])))
             elif parsed.path == "/api/configs":
                 self._send_json(list_configs())
             elif parsed.path == "/api/defaults":
@@ -180,6 +181,10 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 self._handle_switch_config()
             elif parsed.path == "/api/update-config":
                 self._handle_update_config()
+            elif parsed.path == "/api/create-config":
+                self._handle_create_config()
+            elif parsed.path == "/api/delete-run":
+                self._handle_delete_run()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -449,6 +454,51 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     return
             self._send_json({"ok": True})
 
+        def _handle_create_config(self) -> None:
+            body = self._read_json_body()
+            name = (body.get("name") or "").strip()
+            if not name:
+                self._send_json({"ok": False, "error": "name required"}, status=400)
+                return
+            if not name.replace("_", "").replace("-", "").isalnum():
+                self._send_json({"ok": False, "error": "name must be alphanumeric (dashes/underscores ok)"}, status=400)
+                return
+            config_dir = Path("configs/games")
+            config_dir.mkdir(parents=True, exist_ok=True)
+            target = config_dir / f"{name}.yaml"
+            if target.exists():
+                self._send_json({"ok": False, "error": "config already exists"}, status=409)
+                return
+            import yaml
+            with state.lock, target.open("w", encoding="utf-8") as handle:
+                yaml.dump(
+                    {"game": state.config.game.name},
+                    handle,
+                    default_flow_style=False,
+                )
+            self._send_json({"ok": True, "path": str(target)})
+
+        def _handle_delete_run(self) -> None:
+            body = self._read_json_body()
+            name = (body.get("name") or "").strip()
+            if not name:
+                self._send_json({"ok": False, "error": "name required"}, status=400)
+                return
+            with state.lock:
+                if state.job is not None and state.job.thread.is_alive():
+                    run_dir_name = state.job.run_dir.name if state.job.run_dir else ""
+                    if run_dir_name == name:
+                        self._send_json({"ok": False, "error": "cannot delete active training run"}, status=409)
+                        return
+            import shutil
+            output_dir = Path(state.config.experiment.output_dir)
+            run_dir = output_dir / name
+            if not run_dir.is_dir():
+                self._send_json({"ok": False, "error": "run not found"}, status=404)
+                return
+            shutil.rmtree(run_dir)
+            self._send_json({"ok": True})
+
         def _send_game(self) -> None:
             game_url = resolve_game_url(state.config.game.url)
             if not game_url.startswith("file://"):
@@ -649,20 +699,25 @@ def list_configs() -> dict[str, Any]:
     return {"configs": configs}
 
 
-def list_runs(state: UiState) -> dict[str, Any]:
+def list_runs(state: UiState, include_smoke: bool = False) -> dict[str, Any]:
     output_dir = Path(state.config.experiment.output_dir)
     runs: list[dict[str, Any]] = []
     if output_dir.is_dir():
         for child in sorted(output_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
             if child.is_dir() and (child / "config.yaml").exists():
                 summary = _read_json(child / "metrics" / "train_summary.json")
+                algo = summary.get("algorithm", "")
+                is_smoke = algo == "linear_q" or "smoke" in child.name.lower()
+                if is_smoke and not include_smoke:
+                    continue
                 runs.append({
                     "name": child.name,
                     "steps": summary.get("steps"),
                     "episodes": summary.get("episodes"),
                     "best_score": summary.get("best_score"),
-                    "algorithm": summary.get("algorithm"),
+                    "algorithm": algo,
                     "checkpoints": _list_checkpoints(child),
+                    "is_smoke": is_smoke,
                 })
     return {"runs": runs}
 
@@ -685,18 +740,6 @@ def _build_config_detail(config: ProjectConfig) -> list[dict[str, Any]]:
                 ("device", config.experiment.device, "Compute device", {"type": "select", "options": ["cpu", "auto", "mps", "cuda"]}),
                 ("precision", config.experiment.precision, "Numeric precision", {"type": "select", "options": ["fp32", "fp16", "bf16"]}),
                 ("seed", config.experiment.seed, "Random seed", {"type": "number", "min": 0}),
-            ],
-        },
-        {
-            "title": "observation",
-            "fields": [
-                ("mode", config.observation.mode, "Capture method", {"type": "select", "options": ["screenshot", "canvas", "dom_assisted", "hybrid"]}),
-                ("width", config.observation.width, "Width in pixels", {"type": "number", "min": 1, "max": 1024}),
-                ("height", config.observation.height, "Height in pixels", {"type": "number", "min": 1, "max": 1024}),
-                ("frame_stack", config.observation.frame_stack, "Frames to stack", {"type": "number", "min": 1, "max": 32}),
-                ("grayscale", config.observation.grayscale, "Grayscale", {"type": "bool"}),
-                ("normalize", config.observation.normalize, "Normalize to [0,1]", {"type": "bool"}),
-                ("input_channels", config.observation.input_channels, "Input channels", {"type": "readonly"}),
             ],
         },
         {
@@ -737,21 +780,6 @@ def _build_config_detail(config: ProjectConfig) -> list[dict[str, Any]]:
                 ("horizons", list(config.world_model.predictor.horizons), "Horizons", {"type": "readonly"}),
                 ("loss", config.world_model.loss.prediction, "Loss function", {"type": "readonly"}),
                 ("ema_tau", f"{config.world_model.target_encoder.ema_tau_start}–{config.world_model.target_encoder.ema_tau_end}", "EMA tau schedule", {"type": "readonly"}),
-            ],
-        },
-        {
-            "title": "game",
-            "collapsed": True,
-            "fields": [
-                ("name", config.game.name, "Game name", {"type": "readonly"}),
-                ("fps", config.game.fps, "Screenshot FPS", {"type": "number", "min": 1, "max": 120}),
-                ("action_repeat", config.game.action_repeat, "Action repeat", {"type": "number", "min": 1, "max": 30}),
-                ("max_steps_per_episode", config.game.max_steps_per_episode, "Max steps/episode", {"type": "number", "min": 1}),
-                ("actions", config.actions.num_actions, "Action count", {"type": "readonly"}),
-                ("keys", ", ".join(config.actions.keys), "Action keys", {"type": "readonly"}),
-                ("reward", config.reward.type, "Reward type", {"type": "readonly"}),
-                ("score_reader", config.reward.score_reader, "Score reader", {"type": "readonly"}),
-                ("clip_rewards", config.reward.clip_rewards, "Clip rewards [-1,1]", {"type": "readonly"}),
             ],
         },
     ]
@@ -818,6 +846,7 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
             "path": str(state.config_path),
             "game": state.config.game.name,
             "reset_key": state.config.game.reset_key,
+            "action_keys": list(state.config.actions.keys),
             "actions": state.config.actions.num_actions,
             "observation": {
                 "width": state.config.observation.width,
@@ -1518,6 +1547,7 @@ def render_ui_html(state: UiState) -> str:
     </header>
     <div class="controls-bar">
       <div class="field" title="Select a game configuration to load">game <select id="f-config" title="Available game configs in configs/games/"><option value="">loading...</option></select></div>
+      <button onclick="createConfig()" title="Create a new game config from current settings" style="background:transparent;border:1px solid var(--border);border-radius:2px;color:var(--muted);padding:2px 8px;font-size:10px;cursor:pointer;font-family:'Outfit',sans-serif;">+ new config</button>
     </div>
     <main>
       <div class="col col-left">
@@ -1554,6 +1584,10 @@ def render_ui_html(state: UiState) -> str:
       <div class="col col-right">
         <div class="run-select">
           <select id="f-run" onchange="loadRunDetail()" title="Select a past training run to view its details. Leave unselected to configure a new run."><option value="">select run...</option></select>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+            <label style="font-size:9px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:3px;"><input type="checkbox" id="chkSmoke" onchange="loadRuns()" style="accent-color:var(--accent)"> show smoke</label>
+            <button onclick="deleteSelectedRun()" id="btnDeleteRun" class="hidden" title="Delete the selected run and all its data" style="background:transparent;border:1px solid rgba(185,82,76,0.4);border-radius:2px;color:var(--red);padding:2px 8px;font-size:9px;cursor:pointer;font-family:'Outfit',sans-serif;margin-left:auto;">delete</button>
+          </div>
         </div>
         <div class="run-info-bar" id="runInfoBar" title="Current run status and key metrics">
           <span class="rib-dot idle" id="ribDot"></span>
@@ -1824,7 +1858,8 @@ def render_ui_html(state: UiState) -> str:
 
       async function loadRuns() {{
         try {{
-          const res = await fetch("/api/runs");
+          const showSmoke = document.getElementById("chkSmoke") && document.getElementById("chkSmoke").checked;
+          const res = await fetch("/api/runs" + (showSmoke ? "?smoke=true" : ""));
           const data = await res.json();
           const select = document.getElementById("f-run");
           const current = select.value;
@@ -1850,6 +1885,10 @@ def render_ui_html(state: UiState) -> str:
         const ckptRow = document.getElementById("ckptRow");
         if (!name) {{
           if (ckptRow) ckptRow.style.display = "none";
+          // Restore current game config
+          const stRes = await fetch("/api/state");
+          const stData = await stRes.json();
+          renderEditableConfig(stData.config_detail);
           toggleButtons();
           return;
         }}
@@ -1858,6 +1897,9 @@ def render_ui_html(state: UiState) -> str:
           const data = await res.json();
           const cg = document.getElementById("controlGroup");
           if (cg && data.run_dir) cg.dataset.runDir = data.run_dir;
+
+          // Render run's config into config panel
+          if (data.detail) renderEditableConfig(data.detail);
 
           // Checkpoints
           const ckptSel = document.getElementById("f-checkpoint");
@@ -2124,11 +2166,38 @@ def render_ui_html(state: UiState) -> str:
         const btnTrain = document.getElementById("btnTrain");
         const btnStop = document.getElementById("btnStop");
         const btnWatch = document.getElementById("btnWatch");
+        const btnDeleteRun = document.getElementById("btnDeleteRun");
         const ckptSel = document.getElementById("f-checkpoint");
         const hasCkpt = ckptSel && ckptSel.options.length > 0;
+        const runSelected = document.getElementById("f-run").value !== "";
         if (btnTrain) btnTrain.classList.toggle("hidden", !!busy);
         if (btnStop) btnStop.classList.toggle("hidden", !busy);
         if (btnWatch) btnWatch.classList.toggle("hidden", !!busy || !hasCkpt);
+        if (btnDeleteRun) btnDeleteRun.classList.toggle("hidden", !runSelected || !!busy);
+      }}
+
+      async function createConfig() {{
+        const name = prompt("New config name (alphanumeric, dashes ok):");
+        if (!name) return;
+        try {{
+          await api("/api/create-config", {{ name: name.trim() }});
+          loadConfigs();
+          setStatus("config created: " + name);
+        }} catch (e) {{ setStatus(e.message); }}
+      }}
+
+      async function deleteSelectedRun() {{
+        const sel = document.getElementById("f-run");
+        const name = sel.value;
+        if (!name) return;
+        if (!confirm("Delete run '" + name + "' and all its data?")) return;
+        try {{
+          await api("/api/delete-run", {{ name }});
+          sel.value = "";
+          loadRunDetail();
+          loadRuns();
+          setStatus("run deleted: " + name);
+        }} catch (e) {{ setStatus(e.message); }}
       }}
 
       function fmt(v) {{
