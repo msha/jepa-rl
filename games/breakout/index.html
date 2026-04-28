@@ -144,6 +144,53 @@
       let wave = 1;
       let done = false;
       let serving = true;
+      let waiting = true;
+      const DESCRIPTION = "Destroy bricks with a bouncing ball. Don't let it fall!";
+      const BOARD_KEY = "jeparl_breakout";
+
+      function isAI() { return window.location.search.includes("embed"); }
+
+      function loadBoard() {
+        try { return JSON.parse(localStorage.getItem(BOARD_KEY) || "[]"); }
+        catch { return []; }
+      }
+
+      function saveToBoard(s) {
+        if (s <= 0) return loadBoard();
+        const scores = loadBoard();
+        scores.push({ score: s, player: isAI() ? "AI" : "HUMAN" });
+        scores.sort((a, b) => b.score - a.score);
+        if (scores.length > 10) scores.length = 10;
+        try { localStorage.setItem(BOARD_KEY, JSON.stringify(scores)); } catch {}
+        return scores;
+      }
+
+      function drawBoard(cx, y) {
+        const scores = loadBoard().slice(0, 5);
+        ctx.font = "600 12px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#7a8499";
+        ctx.fillText("HIGH SCORES", cx, y);
+        if (scores.length === 0) {
+          ctx.font = "400 11px system-ui";
+          ctx.fillStyle = "#444";
+          ctx.fillText("No scores yet", cx, y + 18);
+          return;
+        }
+        ctx.font = "400 12px system-ui";
+        scores.forEach((e, i) => {
+          const ey = y + 20 + i * 17;
+          ctx.textAlign = "left";
+          ctx.fillStyle = "#555";
+          ctx.fillText(`${i + 1}.`, cx - 70, ey);
+          ctx.fillStyle = e.player === "AI" ? "#64a8ff" : "#27d6a0";
+          ctx.fillText(e.player, cx - 48, ey);
+          ctx.textAlign = "right";
+          ctx.fillStyle = "#c0c8d8";
+          ctx.fillText(String(e.score), cx + 75, ey);
+        });
+        ctx.textAlign = "center";
+      }
 
       function ballSpeed() {
         return Math.min(BASE_BALL_SPEED + (wave - 1) * 0.15, MAX_BALL_SPEED);
@@ -234,6 +281,7 @@
         lives = 3;
         wave = 1;
         done = false;
+        waiting = true;
         paddle.x = 270;
         paddle.vx = 0;
         particles = [];
@@ -252,6 +300,7 @@
 
       function setDone(text) {
         done = true;
+        saveToBoard(score);
         statusEl.dataset.state = "done";
         statusEl.textContent = text;
       }
@@ -276,6 +325,10 @@
         keys.add(event.key);
         if (event.key === " ") {
           event.preventDefault();
+          if (waiting && !done) {
+            waiting = false;
+            return;
+          }
           if (serving && !done) {
             launchBall();
           }
@@ -301,7 +354,7 @@
       }
 
       function update() {
-        if (done) return;
+        if (done || waiting) return;
 
         // Paddle: acceleration-based movement
         if (keys.has("ArrowLeft")) {
@@ -551,8 +604,22 @@
         ctx.fillStyle = "#ff9eae";
         ctx.fill();
 
+        // Start screen
+        if (waiting && !done) {
+          ctx.fillStyle = "rgba(7, 9, 13, 0.88)";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#aeb8ca";
+          ctx.font = "400 13px system-ui";
+          ctx.fillText(DESCRIPTION, canvas.width / 2, canvas.height / 2 - 60);
+          drawBoard(canvas.width / 2, canvas.height / 2 - 30);
+          ctx.fillStyle = "rgba(244, 246, 251, 0.5)";
+          ctx.font = "500 14px system-ui";
+          ctx.fillText("SPACE to start", canvas.width / 2, canvas.height / 2 + 80);
+        }
+
         // Serve prompt
-        if (serving && !done) {
+        if (serving && !done && !waiting) {
           ctx.fillStyle = "rgba(244, 246, 251, 0.5)";
           ctx.font = "500 14px system-ui";
           ctx.textAlign = "center";
@@ -561,12 +628,19 @@
 
         // Game over overlay
         if (done) {
-          ctx.fillStyle = "rgba(7, 9, 13, 0.72)";
+          ctx.fillStyle = "rgba(7, 9, 13, 0.88)";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#ff5a7a";
+          ctx.font = "600 16px system-ui";
+          ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 80);
+          ctx.fillStyle = "#c0c8d8";
+          ctx.font = "400 13px system-ui";
+          ctx.fillText("Score: " + score, canvas.width / 2, canvas.height / 2 - 55);
+          drawBoard(canvas.width / 2, canvas.height / 2 - 30);
           ctx.fillStyle = "#aeb8ca";
           ctx.font = "400 14px system-ui";
-          ctx.textAlign = "center";
-          ctx.fillText("Press R to restart", canvas.width / 2, canvas.height / 2);
+          ctx.fillText("Press R to restart", canvas.width / 2, canvas.height / 2 + 80);
         }
       }
 

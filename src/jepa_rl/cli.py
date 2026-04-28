@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import statistics
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -212,7 +213,46 @@ def _cmd_collect_random(args: argparse.Namespace) -> int:
         print(f"browser error: {exc}", file=sys.stderr)
         return 2
 
-    print(f"random collection complete: run_dir={run_dir} episodes={args.episodes}")
+    # --- Compute random baseline summary from collected episodes ---
+    episodes_data = []
+    for line in metrics_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            episodes_data.append(json.loads(line))
+
+    scores = [ep["score"] for ep in episodes_data]
+    lengths = [ep["steps"] for ep in episodes_data]
+
+    sorted_scores = sorted(scores)
+    n = len(sorted_scores)
+    p95_idx = min(int(n * 0.95), n - 1)
+    p5_idx = min(int(n * 0.05), n - 1)
+
+    summary = {
+        "total_episodes": n,
+        "score_mean": statistics.mean(scores),
+        "score_median": statistics.median(scores),
+        "score_p95": sorted_scores[p95_idx],
+        "score_p5": sorted_scores[p5_idx],
+        "score_max": max(scores),
+        "score_min": min(scores),
+        "mean_episode_length": statistics.mean(lengths),
+    }
+
+    summary_path = run_dir / "random_baseline_summary.json"
+    with summary_path.open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+        f.write("\n")
+
+    print(
+        f"random collection complete: run_dir={run_dir} episodes={n} "
+        f"mean_score={summary['score_mean']:.2f} "
+        f"median_score={summary['score_median']:.2f} "
+        f"p95={summary['score_p95']:.2f} p5={summary['score_p5']:.2f} "
+        f"max={summary['score_max']:.2f} min={summary['score_min']:.2f} "
+        f"mean_length={summary['mean_episode_length']:.1f}"
+    )
+    print(f"summary written to {summary_path}")
     return 0
 
 
@@ -232,6 +272,25 @@ def _cmd_train(args: argparse.Namespace) -> int:
 
             summary = train_dqn(
                 config,
+                experiment=args.experiment,
+                steps=args.steps,
+                learning_starts=args.learning_starts,
+                headless=not args.headed,
+                batch_size=args.batch_size,
+                dashboard_every=args.dashboard_every,
+            )
+        elif algorithm == "frozen_jepa_dqn":
+            from jepa_rl.training.frozen_jepa_dqn import train_frozen_jepa_dqn
+
+            if not args.jepa_checkpoint:
+                print(
+                    "train failed: --jepa-checkpoint is required for frozen_jepa_dqn",
+                    file=sys.stderr,
+                )
+                return 2
+            summary = train_frozen_jepa_dqn(
+                config,
+                jepa_checkpoint=args.jepa_checkpoint,
                 experiment=args.experiment,
                 steps=args.steps,
                 learning_starts=args.learning_starts,
@@ -289,6 +348,22 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
             summary = evaluate_dqn(
                 config,
+                checkpoint=args.checkpoint,
+                episodes=args.episodes,
+                headless=not args.headed,
+            )
+        elif algorithm == "frozen_jepa_dqn":
+            from jepa_rl.training.frozen_jepa_dqn import evaluate_frozen_jepa_dqn
+
+            if not args.jepa_checkpoint:
+                print(
+                    "eval failed: --jepa-checkpoint is required for frozen_jepa_dqn",
+                    file=sys.stderr,
+                )
+                return 2
+            summary = evaluate_frozen_jepa_dqn(
+                config,
+                jepa_checkpoint=args.jepa_checkpoint,
                 checkpoint=args.checkpoint,
                 episodes=args.episodes,
                 headless=not args.headed,
@@ -514,6 +589,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rewrite dashboard every N steps. Use 0 to write only at the end.",
     )
     train.add_argument("--headed", action="store_true", help="Show the browser window.")
+    train.add_argument(
+        "--jepa-checkpoint",
+        type=Path,
+        default=None,
+        help="Path to a pretrained JEPA encoder checkpoint (required for frozen_jepa_dqn).",
+    )
     train.set_defaults(func=_cmd_train)
 
     evaluate = subparsers.add_parser("eval", help="Evaluate a trained linear Q checkpoint.")
@@ -526,6 +607,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument("--episodes", type=int, default=5, help="Number of evaluation episodes.")
     evaluate.add_argument("--headed", action="store_true", help="Show the browser window.")
+    evaluate.add_argument(
+        "--jepa-checkpoint",
+        type=Path,
+        default=None,
+        help="Path to a pretrained JEPA encoder checkpoint (required for frozen_jepa_dqn).",
+    )
     evaluate.set_defaults(func=_cmd_eval)
 
     return parser

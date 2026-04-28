@@ -101,6 +101,8 @@ def _make_env_with_mock_page(
 
     env._page = mock_page
     env._recorder = None
+    env._reset_failures = 0
+    env._score_failures = 0
 
     return env
 
@@ -131,6 +133,15 @@ def test_no_screenshot_when_run_dir_is_none(tmp_path):
         env.read_score()
 
     assert not (tmp_path / "score_failures").exists()
+
+
+def test_read_score_success_through_mock_page(tmp_path):
+    """read_score returns the correct float when the mock page has a valid score."""
+    env = _make_env_with_mock_page(tmp_path, page_text="42")
+
+    score = env.read_score()
+
+    assert score == 42.0
 
 
 def test_screenshot_failure_does_not_suppress_original_error(tmp_path):

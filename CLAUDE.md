@@ -39,7 +39,7 @@ Implemented now:
 - `jepa-rl train` for the current NumPy linear pixel-Q smoke model.
 - `jepa-rl eval` for the current `.npz` smoke-model checkpoints.
 - Typed config validation and starter configs.
-- Local Breakout-like HTML game at `games/breakout/index.html`.
+- Local HTML games at `games/<name>/index.html`: breakout, snake, asteroids.
 - Playwright screenshot environment and DOM score reader.
 - Discrete keyboard action parsing.
 - In-memory replay buffer and sequence sampling.
@@ -91,6 +91,163 @@ These are intentional. Do not add features that violate them without checking wi
 - **No privileged JavaScript callbacks unless explicitly configured.** When a config opts into a JS score/reset callback, it must be marked `privileged: true` and that fact must appear in run metadata and evaluation reports.
 - **No personal browser sessions.** Dedicated browser profiles only. No logged-in accounts, no extensions, no shared state with the user's real Chromium.
 - **No game source code as privileged input.** The agent learns from pixels (and optionally DOM text from the score reader), not from reading the game's JS.
+
+## Game Implementation Standard
+
+Every game in `games/<name>/index.html` is a single self-contained HTML file (no external deps, no images) that renders on a 640x480 `<canvas>` and follows the contract below. The existing games (breakout, snake, asteroids) are the reference implementations — when adding a new game, copy the structure exactly.
+
+### Game Descriptions
+
+Each game has a one-line `DESCRIPTION` constant shown on the start screen:
+
+| Game | Description |
+|---|---|
+| Breakout | Destroy bricks with a bouncing ball. Don't let it fall! |
+| Snake | Eat food to grow longer. Avoid walls and yourself! |
+| Asteroids | Shoot the asteroids. Don't get hit! |
+
+New games must define their own `DESCRIPTION` constant.
+
+### Highscore Board
+
+Every game includes a localStorage-backed highscore board that distinguishes **HUMAN** vs **AI** players:
+
+- `?embed` in the URL (RL environment mode) → scores tagged as `AI`
+- Direct browser play → scores tagged as `HUMAN`
+- Storage key: `jeparl_<game>_scores` (e.g. `jeparl_breakout_scores`)
+- Top 10 persisted, top 5 displayed on canvas
+- `AI` entries rendered in `#64a8ff` (blue), `HUMAN` entries in `#27d6a0` (green)
+- Shown on both the start screen and the game-over screen
+- `saveToBoard(score)` called inside `setDone()` — scores are saved when the episode ends
+
+Required functions (same pattern in every game):
+
+```javascript
+function isAI() { return window.location.search.includes("embed"); }
+function loadBoard() { /* read localStorage, return array */ }
+function saveToBoard(s) { /* add entry, sort desc, trim to 10, persist */ }
+function drawBoard(cx, y) { /* render top 5 on canvas */ }
+```
+
+### DOM Contract (required, identical across all games)
+
+```html
+<main>
+  <header>
+    <h1>JEPA-RL <GameName></h1>
+    <div class="stats">
+      <span>Score <strong id="score">0</strong></span>
+      <span>Lives <strong id="lives">3</strong></span>
+    </div>
+  </header>
+  <canvas id="game" width="640" height="480" tabindex="0"></canvas>
+  <div id="status" data-state="playing">Playing</div>
+</main>
+```
+
+- `#score` — integer text content, updated on every score change. The RL score reader extracts this via `score_selector: "#score"`.
+- `#lives` — integer text content. Player starts with 3 lives.
+- `#status[data-state]` — set to `"playing"` during play, switches to `"done"` on episode end. The RL environment checks `done_selector: "#status[data-state='done']"`.
+- `<header>` and `#status` are visually hidden (`position: absolute; clip: rect(0,0,0,0)`) — the canvas IS the entire visual. No visible title, no HUD outside the canvas.
+- `?embed` URL param adds `.embed` class to `<body>`, which hides header/status and stretches the canvas to fill.
+
+### Canvas and Visual Style
+
+- **Canvas**: 640x480, `aspect-ratio: 4/3`, fills container width.
+- **Background**: `#07090d` (dark), `#111318` page background.
+- **Player elements**: `#f4f6fb` (white) for ship/paddle, body parts.
+- **Positive feedback**: `#27d6a0` (green) for food/score pickups, `#64a8ff` (blue) as secondary.
+- **Negative/danger**: `#ff5a7a` (red/pink) for death particles, thrust flame.
+- **Neutral objects**: `#c0c8d8` (light gray) for bricks, asteroids.
+- **Accent/highlight**: `#ffd166` (gold) for bullets, special pickups.
+- **Particles**: Use `spawnParticles()` pattern — small squares with decay, gravity, and alpha fade for juice.
+- **No visible text on canvas** except start screen (description + highscores + "SPACE to start"), "SPACE to serve" (breakout only), and game-over screen (GAME OVER + score + highscores + "Press R to restart"). All use `rgba(244, 246, 251, 0.5)` or `#aeb8ca`, `14px system-ui`.
+
+### Controls and Lifecycle
+
+- **Start**: Space begins/restarts play. Game opens in a `waiting` state — canvas renders but no movement until Space.
+- **Restart**: `R` key calls `resetGame()` when `done === true`.
+- **Movement**: Arrow keys for primary movement (prevent-default on all arrow keys). Individual games choose which arrows matter.
+- **Action**: Space for fire/launch/shoot (in addition to start). Individual games choose.
+- **Arrow keys must call `event.preventDefault()`** to prevent page scroll.
+
+### Difficulty Progression
+
+Every game must get harder over time so the RL agent faces increasing challenge:
+
+- **Breakout**: Waves spawn with fortified bricks; ball speed increases per wave.
+- **Snake**: Move interval decreases (speed increases) by `SPEED_STEP` ms per food eaten, clamped at `MIN_INTERVAL`.
+- **Asteroids**: Each wave spawns `2 + wave` asteroids; wave number increases when all asteroids are destroyed.
+
+New games must define an analogous progression mechanism.
+
+### Score and Lives
+
+- Player starts with **3 lives** and **0 score**.
+- Score is always a positive integer, increasing monotonically during play.
+- Each game defines its own point values, but they should be coarse enough that `score_delta` rewards are non-trivial (avoid +1 per frame; prefer +10, +20, +50, +100 for discrete events).
+- Losing a life triggers a respawn/waiting state (not immediate game-over). Lives decrement to 0 triggers `setDone("Done")`.
+- `resetGame()` restores score=0, lives=3, and all game state.
+
+### Required JS Functions
+
+Every game must implement these exact names:
+
+```javascript
+function setDone(text) { done = true; statusEl.dataset.state = "done"; statusEl.textContent = text; }
+function updateStats() { scoreEl.textContent = String(score); livesEl.textContent = String(lives); }
+function resetGame() { /* reset all state, set status to "playing" */ }
+function update() { /* game logic, skip if done */ }
+function draw() { /* render canvas */ }
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+```
+
+### CSS (identical across all games, copy verbatim)
+
+The root CSS (color-scheme dark, font stack, body grid, canvas styling, embed mode, hidden header/status) is the same in every game. Do not change it — only the `<title>` and `<h1>` text differ.
+
+### Config File (`configs/games/<name>.yaml`)
+
+```yaml
+extends:
+  - ../base.yaml
+  - ../presets/small.yaml
+
+experiment:
+  name: <name>_jepa_dqn_small
+  seed: 42
+  device: auto
+  precision: fp32
+
+game:
+  name: <name>
+  url: "file://games/<name>/index.html"
+  headless: true
+  fps: 30
+  action_repeat: 4
+  max_steps_per_episode: 1000
+  done_selector: "#status[data-state='done']"
+  reset_key: Space
+
+actions:
+  type: discrete_keyboard
+  repeat: 4
+  keys:
+    - noop
+    # ... game-specific keys and combos
+
+reward:
+  type: score_delta
+  score_reader: dom
+  score_selector: "#score"
+  privileged: false
+
+evaluation:
+  episodes: 20
+  deterministic: true
+  record_video: true
+  save_best_by: mean_score
+```
 
 ## Configuration-First Discipline
 

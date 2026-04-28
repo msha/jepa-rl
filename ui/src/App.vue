@@ -6,7 +6,6 @@ import ChartPanel from './components/ChartPanel.vue'
 import GameSection from './components/GameSection.vue'
 import GameSettings from './components/GameSettings.vue'
 import RunSelector from './components/RunSelector.vue'
-import RunInfoBar from './components/RunInfoBar.vue'
 import TrainControls from './components/TrainControls.vue'
 import ConfigPanel from './components/ConfigPanel.vue'
 import EpisodesTable from './components/EpisodesTable.vue'
@@ -36,7 +35,7 @@ onMounted(() => {
   <ControlsBar />
   <main>
     <div class="col col-left">
-      <MetricsGrid :summary="training.summary" :latest-step="training.latestStep" :eval-result="training.evalResult" />
+      <MetricsGrid :summary="training.summary" :latest-step="training.latestStep" :eval-result="training.evalResult" :world-job="training.worldJob" :collect-job="training.collectJob" />
       <div class="charts">
         <ChartPanel label="score" :points="training.chartPoints('score')" color="#5d9e5d" />
         <ChartPanel label="loss" :points="training.chartPoints('loss')" color="#4e89ba" />
@@ -57,8 +56,7 @@ onMounted(() => {
     </div>
     <div class="col col-right">
       <RunSelector />
-      <RunInfoBar :job="training.job" :eval-job="training.evalJob" :summary="training.summary" :latest-step="training.latestStep" />
-      <TrainControls />
+      <TrainControls :job="training.job" :eval-job="training.evalJob" :summary="training.summary" :latest-step="training.latestStep" />
       <ConfigPanel />
     </div>
   </main>

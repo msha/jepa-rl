@@ -61,6 +61,43 @@ class TestApplyNormalize:
         assert result.dtype == np.float32
 
 
+def test_frame_stack_reset_behavior() -> None:
+    """Deque-based frame stacking survives a full reset cycle.
+
+    Simulates the reset-then-step-then-reset lifecycle used by
+    PlaywrightBrowserGameEnv's frame buffer without requiring a browser.
+    """
+    # 1. Create deque with maxlen=4
+    buffer: deque[np.ndarray] = deque(maxlen=4)
+
+    # 2-3. Fill with frame A (ones) simulating initial reset
+    frame_a = np.ones((3, 16, 16), dtype=np.float32)
+    for _ in range(4):
+        buffer.append(frame_a)
+
+    # 4. Stack and verify shape
+    stacked = np.concatenate(list(buffer), axis=0)
+    assert stacked.shape == (12, 16, 16)
+
+    # 5-6. Push frame B (twos) 4 times simulating steps, verify shape unchanged
+    frame_b = np.full((3, 16, 16), 2.0, dtype=np.float32)
+    for _ in range(4):
+        buffer.append(frame_b)
+    stacked = np.concatenate(list(buffer), axis=0)
+    assert stacked.shape == (12, 16, 16)
+
+    # 7. Clear and refill with frame C (threes) simulating reset
+    frame_c = np.full((3, 16, 16), 3.0, dtype=np.float32)
+    buffer.clear()
+    for _ in range(4):
+        buffer.append(frame_c)
+
+    # 8. Verify shape and all values are 3.0
+    stacked = np.concatenate(list(buffer), axis=0)
+    assert stacked.shape == (12, 16, 16)
+    np.testing.assert_array_equal(stacked, 3.0)
+
+
 @pytest.mark.parametrize("grayscale", [True, False])
 @pytest.mark.parametrize("frame_stack", [1, 4])
 def test_frame_stack_shape(grayscale: bool, frame_stack: int) -> None:

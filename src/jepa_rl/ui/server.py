@@ -53,6 +53,21 @@ class EvalJob:
 
 
 @dataclass
+class CollectJob:
+    run_name: str
+    run_dir: Path
+    episodes_target: int
+    stop_event: threading.Event
+    thread: threading.Thread
+    status: str = "starting"
+    episodes_done: int = 0
+    mean_score: float = 0.0
+    error: str | None = None
+    started_at: float = field(default_factory=time.time)
+    completed_at: float | None = None
+
+
+@dataclass
 class UiState:
     config_path: Path
     config: ProjectConfig
@@ -64,6 +79,14 @@ class UiState:
     run_dir: Path
     job: TrainingJob | None = None
     eval_job: EvalJob | None = None
+    world_job: TrainingJob | None = None
+    collect_job: CollectJob | None = None
+    live_step_events: collections.deque = field(
+        default_factory=lambda: collections.deque(maxlen=500)
+    )
+    world_step_events: collections.deque = field(
+        default_factory=lambda: collections.deque(maxlen=200)
+    )
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -185,6 +208,20 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 self._handle_create_config()
             elif parsed.path == "/api/delete-run":
                 self._handle_delete_run()
+            elif parsed.path == "/api/validate-config":
+                self._handle_validate_config()
+            elif parsed.path == "/api/open-game":
+                self._handle_open_game()
+            elif parsed.path == "/api/ml-smoke":
+                self._handle_ml_smoke()
+            elif parsed.path == "/api/collect-random/start":
+                self._handle_collect_random_start()
+            elif parsed.path == "/api/collect-random/stop":
+                self._handle_collect_random_stop()
+            elif parsed.path == "/api/train-world/start":
+                self._handle_train_world_start()
+            elif parsed.path == "/api/train-world/stop":
+                self._handle_train_world_stop()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -224,6 +261,11 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 batch_size_value = body.get("batch_size", state.batch_size)
                 batch_size = int(batch_size_value) if batch_size_value not in (None, "") else None
                 dashboard_every = int(body.get("dashboard_every") or state.dashboard_every)
+                lr_value = body.get("lr")
+                lr = float(lr_value) if lr_value not in (None, "") else None
+                headed = bool(body.get("headed", False))
+                jepa_ckpt_str = body.get("jepa_checkpoint")
+                jepa_checkpoint = Path(jepa_ckpt_str) if jepa_ckpt_str else None
                 run_dir = create_run_dir(state.config.experiment.output_dir, run_name)
                 snapshot_config(state.config, run_dir / "config.yaml")
                 stop_event = threading.Event()
@@ -242,6 +284,9 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                             batch_size,
                             dashboard_every,
                             stop_event,
+                            lr,
+                            headed,
+                            jepa_checkpoint,
                         ),
                         daemon=True,
                     ),
@@ -249,6 +294,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 state.experiment = run_name
                 state.run_dir = run_dir
                 state.job = job
+                state.live_step_events.clear()
                 job.thread.start()
             self._send_json({"ok": True, "run_dir": str(run_dir)})
 
@@ -275,12 +321,15 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     self._send_json({"ok": False, "error": f"run config invalid: {exc}"}, status=400)
                     return
             algorithm = eval_config.agent.algorithm
+            expected_suffix = ".pt" if algorithm in {"dqn", "frozen_jepa_dqn"} else ".npz"
             ckpt_name = body.get("checkpoint")
             if ckpt_name:
+                if not ckpt_name.endswith(expected_suffix):
+                    self._send_json({"ok": False, "error": f"checkpoint {ckpt_name} is not a {algorithm} checkpoint (expected {expected_suffix})"}, status=400)
+                    return
                 checkpoint = eval_run_dir / "checkpoints" / ckpt_name
             else:
-                suffix = ".pt" if algorithm == "dqn" else ".npz"
-                checkpoint = eval_run_dir / "checkpoints" / f"latest{suffix}"
+                checkpoint = eval_run_dir / "checkpoints" / f"latest{expected_suffix}"
             if not checkpoint.exists():
                 self._send_json({"ok": False, "error": f"checkpoint not found: {checkpoint.name}"}, status=404)
                 return
@@ -293,6 +342,27 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
 
                     device = resolve_torch_device(eval_config.experiment.device)
                     net = build_q_network(eval_config, num_actions=eval_config.actions.num_actions).to(device)
+                    load_torch_checkpoint(checkpoint, model=net, target_model=None, optimizer=None)
+                    net.eval()
+                    model = net
+                elif algorithm == "frozen_jepa_dqn":
+                    from jepa_rl.models.device import resolve_torch_device
+                    from jepa_rl.models.frozen_jepa_dqn import build_frozen_jepa_q_network
+                    from jepa_rl.utils.checkpoint import load_torch_checkpoint
+
+                    device = resolve_torch_device(eval_config.experiment.device)
+                    jepa_ckpt_override = body.get("jepa_checkpoint")
+                    if jepa_ckpt_override:
+                        jepa_ckpt = Path(jepa_ckpt_override)
+                    else:
+                        jepa_ckpt = eval_config.training.extra.get("jepa_checkpoint") if hasattr(eval_config.training, "extra") else None
+                    if not jepa_ckpt:
+                        candidates = sorted(Path(eval_config.experiment.output_dir).glob("*_world/checkpoints/latest.pt"), reverse=True)
+                        if not candidates:
+                            self._send_json({"ok": False, "error": "No JEPA checkpoint found for frozen_jepa_dqn eval"}, status=400)
+                            return
+                        jepa_ckpt = candidates[0]
+                    net = build_frozen_jepa_q_network(eval_config, num_actions=eval_config.actions.num_actions, jepa_checkpoint_path=Path(jepa_ckpt)).to(device)
                     load_torch_checkpoint(checkpoint, model=net, target_model=None, optimizer=None)
                     net.eval()
                     model = net
@@ -378,7 +448,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 import numpy as np
 
                 obs = np.concatenate(frames, axis=0)
-                if algorithm == "dqn":
+                if algorithm in {"dqn", "frozen_jepa_dqn"}:
                     import torch
 
                     obs_t = torch.from_numpy(obs[None]).to(device)
@@ -410,6 +480,148 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             with state.lock:
                 state.eval_job = None
             self._send_json({"ok": True})
+
+        def _handle_validate_config(self) -> None:
+            body = self._read_json_body()
+            config_path_str = body.get("config") or str(state.config_path)
+            try:
+                cfg = load_config(Path(config_path_str))
+                self._send_json({
+                    "ok": True,
+                    "game": cfg.game.name,
+                    "algorithm": cfg.agent.algorithm,
+                    "actions": cfg.actions.num_actions,
+                    "device": cfg.experiment.device,
+                })
+            except Exception as exc:  # noqa: BLE001
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+
+        def _handle_open_game(self) -> None:
+            body = self._read_json_body()
+            seconds = float(body.get("seconds") or 10.0)
+            random_steps = int(body.get("random_steps") or 0)
+            hold = bool(body.get("hold", False))
+            try:
+                from jepa_rl.browser.playwright_env import PlaywrightBrowserGameEnv
+                import threading as _threading
+
+                def _open_worker() -> None:
+                    with PlaywrightBrowserGameEnv(state.config, headless=False, run_dir=state.run_dir) as env:
+                        env.reset()
+                        if random_steps > 0:
+                            import random as _random
+                            rng = _random.Random(state.config.experiment.seed)
+                            for _ in range(random_steps):
+                                env.step(rng.randrange(state.config.actions.num_actions))
+                        if not hold:
+                            import time as _time
+                            _time.sleep(seconds)
+
+                t = _threading.Thread(target=_open_worker, daemon=True)
+                t.start()
+                self._send_json({"ok": True})
+            except Exception as exc:  # noqa: BLE001
+                self._send_json({"ok": False, "error": str(exc)}, status=500)
+
+        def _handle_ml_smoke(self) -> None:
+            body = self._read_json_body()
+            steps = int(body.get("steps") or 2000)
+            lr = float(body.get("lr") or 0.03)
+            seed = int(body.get("seed") or 0)
+            try:
+                from jepa_rl.training.simple_q import run_linear_q_ml_smoke
+                result = run_linear_q_ml_smoke(steps=steps, lr=lr, seed=seed)
+                self._send_json({
+                    "ok": True,
+                    "passed": result.improvement > 0,
+                    "steps": result.steps,
+                    "initial_loss": result.initial_loss,
+                    "final_loss": result.final_loss,
+                    "improvement": result.improvement,
+                })
+            except Exception as exc:  # noqa: BLE001
+                self._send_json({"ok": False, "error": str(exc)}, status=500)
+
+        def _handle_collect_random_start(self) -> None:
+            body = self._read_json_body()
+            with state.lock:
+                if state.collect_job is not None and state.collect_job.thread.is_alive():
+                    self._send_json({"ok": False, "error": "collection already running"}, status=409)
+                    return
+                run_name = str(body.get("experiment") or f"{state.config.game.name}_random")
+                episodes = int(body.get("episodes") or 5)
+                max_steps = int(body.get("max_steps") or 200)
+                headed = bool(body.get("headed", False))
+                run_dir = create_run_dir(state.config.experiment.output_dir, run_name)
+                snapshot_config(state.config, run_dir / "config.yaml")
+                stop_event = threading.Event()
+                cj = CollectJob(
+                    run_name=run_name,
+                    run_dir=run_dir,
+                    episodes_target=episodes,
+                    stop_event=stop_event,
+                    thread=threading.Thread(
+                        target=_collect_random_worker,
+                        args=(state, run_name, run_dir, episodes, max_steps, headed, stop_event),
+                        daemon=True,
+                    ),
+                )
+                state.collect_job = cj
+                cj.thread.start()
+            self._send_json({"ok": True, "run_dir": str(run_dir)})
+
+        def _handle_collect_random_stop(self) -> None:
+            with state.lock:
+                if state.collect_job is None or not state.collect_job.thread.is_alive():
+                    self._send_json({"ok": True, "status": "not_running"})
+                    return
+                state.collect_job.stop_event.set()
+                state.collect_job.status = "stopping"
+            self._send_json({"ok": True, "status": "stopping"})
+
+        def _handle_train_world_start(self) -> None:
+            body = self._read_json_body()
+            with state.lock:
+                if state.world_job is not None and state.world_job.thread.is_alive():
+                    self._send_json({"ok": False, "error": "world model training already running"}, status=409)
+                    return
+                run_name = str(body.get("experiment") or f"{state.experiment}_world")
+                steps = int(body.get("steps") or 1000)
+                collect_steps_val = body.get("collect_steps")
+                collect_steps = int(collect_steps_val) if collect_steps_val not in (None, "") else None
+                batch_size_val = body.get("batch_size")
+                batch_size = int(batch_size_val) if batch_size_val not in (None, "") else None
+                lr_val = body.get("lr")
+                lr = float(lr_val) if lr_val not in (None, "") else None
+                dashboard_every = int(body.get("dashboard_every") or 25)
+                headed = bool(body.get("headed", False))
+                run_dir = create_run_dir(state.config.experiment.output_dir, run_name)
+                snapshot_config(state.config, run_dir / "config.yaml")
+                stop_event = threading.Event()
+                wj = TrainingJob(
+                    run_name=run_name,
+                    run_dir=run_dir,
+                    requested_steps=steps,
+                    stop_event=stop_event,
+                    thread=threading.Thread(
+                        target=_train_world_worker,
+                        args=(state, run_name, steps, collect_steps, batch_size, lr, dashboard_every, headed, stop_event),
+                        daemon=True,
+                    ),
+                )
+                state.world_job = wj
+                state.world_step_events.clear()
+                wj.thread.start()
+            self._send_json({"ok": True, "run_dir": str(run_dir)})
+
+        def _handle_train_world_stop(self) -> None:
+            with state.lock:
+                if state.world_job is None or not state.world_job.thread.is_alive():
+                    self._send_json({"ok": True, "status": "not_running"})
+                    return
+                state.world_job.status = "stopping"
+                state.world_job.stop_event.set()
+            self._send_json({"ok": True, "status": "stopping"})
 
         def _handle_switch_config(self) -> None:
             body = self._read_json_body()
@@ -576,7 +788,8 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             except Exception:  # noqa: BLE001
                 detail = []
             summary = _read_json(run_dir / "metrics" / "train_summary.json")
-            self._send_json({"detail": detail, "summary": summary, "checkpoints": _list_checkpoints(run_dir), "run_dir": str(run_dir)})
+            algo = str(summary.get("algorithm", ""))
+            self._send_json({"detail": detail, "summary": summary, "checkpoints": _list_checkpoints(run_dir, algorithm=algo), "run_dir": str(run_dir)})
 
     return TrainingUiHandler
 
@@ -589,6 +802,9 @@ def _training_worker(
     batch_size: int | None,
     dashboard_every: int,
     stop_event: threading.Event,
+    lr: float | None = None,
+    headed: bool = False,
+    jepa_checkpoint: Path | None = None,
 ) -> None:
     with state.lock:
         if state.job is not None:
@@ -597,6 +813,11 @@ def _training_worker(
     try:
         algorithm = state.config.agent.algorithm
         screenshot = job_run_dir / "frame.png"
+
+        def live_step_callback(event: dict[str, Any]) -> None:
+            with state.lock:
+                state.live_step_events.append(event)
+
         if algorithm == "dqn":
             from jepa_rl.training.pixel_dqn import train_dqn
 
@@ -607,9 +828,35 @@ def _training_worker(
                 learning_starts=learning_starts,
                 batch_size=batch_size,
                 dashboard_every=dashboard_every,
-                headless=True,
+                headless=not headed,
                 stop_event=stop_event,
                 screenshot_path=screenshot,
+                live_step_callback=live_step_callback,
+            )
+        elif algorithm == "frozen_jepa_dqn":
+            from jepa_rl.training.frozen_jepa_dqn import train_frozen_jepa_dqn
+
+            if jepa_checkpoint is None:
+                jepa_ckpt_cfg = state.config.training.extra.get("jepa_checkpoint") if hasattr(state.config.training, "extra") else None
+                if jepa_ckpt_cfg:
+                    jepa_checkpoint = Path(jepa_ckpt_cfg)
+                else:
+                    candidates = sorted(Path(state.config.experiment.output_dir).glob("*_world/checkpoints/latest.pt"), reverse=True)
+                    if not candidates:
+                        raise ValueError("No JEPA checkpoint found. Run train-world first or provide a JEPA checkpoint path.")
+                    jepa_checkpoint = candidates[0]
+            train_frozen_jepa_dqn(
+                state.config,
+                jepa_checkpoint=jepa_checkpoint,
+                experiment=run_name,
+                steps=steps,
+                learning_starts=learning_starts,
+                batch_size=batch_size,
+                dashboard_every=dashboard_every,
+                headless=not headed,
+                stop_event=stop_event,
+                screenshot_path=screenshot,
+                live_step_callback=live_step_callback,
             )
         else:
             train_linear_q(
@@ -617,11 +864,13 @@ def _training_worker(
                 experiment=run_name,
                 steps=steps,
                 learning_starts=learning_starts,
+                lr=lr,
                 batch_size=batch_size,
                 dashboard_every=dashboard_every,
-                headless=True,
+                headless=not headed,
                 stop_event=stop_event,
                 screenshot_path=screenshot,
+                live_step_callback=live_step_callback,
             )
     except Exception as exc:  # noqa: BLE001 - local UI needs to expose worker errors.
         with state.lock:
@@ -636,6 +885,135 @@ def _training_worker(
             state.job.status = "stopped" if stop_event.is_set() else "completed"
             state.job.completed_at = time.time()
 
+
+def _collect_random_worker(
+    state: UiState,
+    run_name: str,
+    run_dir: Path,
+    episodes: int,
+    max_steps: int,
+    headed: bool,
+    stop_event: threading.Event,
+) -> None:
+    import json
+    import random
+    import statistics
+
+    with state.lock:
+        if state.collect_job is not None:
+            state.collect_job.status = "running"
+
+    try:
+        from jepa_rl.browser.playwright_env import PlaywrightBrowserGameEnv
+
+        metrics_path = run_dir / "metrics" / "random_events.jsonl"
+        rng = random.Random(state.config.experiment.seed)
+        episodes_data: list[dict[str, Any]] = []
+
+        with (
+            PlaywrightBrowserGameEnv(state.config, headless=not headed, run_dir=run_dir) as env,
+            metrics_path.open("w", encoding="utf-8") as metrics,
+        ):
+            for episode in range(episodes):
+                if stop_event.is_set():
+                    break
+                env.reset()
+                episode_return = 0.0
+                score = 0.0
+                steps_taken = 0
+                for step_index in range(1, max_steps + 1):
+                    if stop_event.is_set():
+                        break
+                    steps_taken = step_index
+                    action = rng.randrange(state.config.actions.num_actions)
+                    result = env.step(action)
+                    episode_return += result.reward
+                    score = result.score
+                    if result.done:
+                        break
+                record: dict[str, Any] = {"type": "episode", "episode": episode, "return": episode_return, "score": score, "steps": steps_taken}
+                metrics.write(json.dumps(record) + "\n")
+                episodes_data.append(record)
+                with state.lock:
+                    if state.collect_job is not None:
+                        state.collect_job.episodes_done = episode + 1
+                        scores_so_far = [e["score"] for e in episodes_data]
+                        state.collect_job.mean_score = float(sum(scores_so_far) / len(scores_so_far))
+    except Exception as exc:  # noqa: BLE001
+        with state.lock:
+            if state.collect_job is not None:
+                state.collect_job.status = "error"
+                state.collect_job.error = str(exc)
+                state.collect_job.completed_at = time.time()
+        return
+
+    if episodes_data:
+        scores = [ep["score"] for ep in episodes_data]
+        lengths = [ep["steps"] for ep in episodes_data]
+        sorted_scores = sorted(scores)
+        n = len(sorted_scores)
+        summary: dict[str, Any] = {
+            "total_episodes": n,
+            "score_mean": statistics.mean(scores),
+            "score_median": statistics.median(scores),
+            "score_p95": sorted_scores[min(int(n * 0.95), n - 1)],
+            "score_p5": sorted_scores[min(int(n * 0.05), n - 1)],
+            "score_max": max(scores),
+            "score_min": min(scores),
+            "mean_episode_length": statistics.mean(lengths),
+        }
+        summary_path = run_dir / "random_baseline_summary.json"
+        with summary_path.open("w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+            f.write("\n")
+
+    with state.lock:
+        if state.collect_job is not None:
+            state.collect_job.status = "stopped" if stop_event.is_set() else "completed"
+            state.collect_job.completed_at = time.time()
+
+
+def _train_world_worker(
+    state: UiState,
+    run_name: str,
+    steps: int,
+    collect_steps: int | None,
+    batch_size: int | None,
+    lr: float | None,
+    dashboard_every: int,
+    headed: bool,
+    stop_event: threading.Event,
+) -> None:
+    with state.lock:
+        if state.world_job is not None:
+            state.world_job.status = "running"
+
+    try:
+        from jepa_rl.training.jepa_world import train_jepa_world
+
+        train_jepa_world(
+            state.config,
+            experiment=run_name,
+            steps=steps,
+            collect_steps=collect_steps,
+            batch_size=batch_size,
+            lr=lr,
+            dashboard_every=dashboard_every,
+            headless=not headed,
+            stop_event=stop_event,
+        )
+    except Exception as exc:  # noqa: BLE001
+        with state.lock:
+            if state.world_job is not None:
+                state.world_job.status = "error"
+                state.world_job.error = str(exc)
+                state.world_job.completed_at = time.time()
+        return
+
+    with state.lock:
+        if state.world_job is not None:
+            state.world_job.status = "stopped" if stop_event.is_set() else "completed"
+            state.world_job.completed_at = time.time()
 
 
 _CONFIG_GROUPS: dict[str, type] = {
@@ -716,17 +1094,31 @@ def list_runs(state: UiState, include_smoke: bool = False) -> dict[str, Any]:
                     "episodes": summary.get("episodes"),
                     "best_score": summary.get("best_score"),
                     "algorithm": algo,
-                    "checkpoints": _list_checkpoints(child),
+                    "checkpoints": _list_checkpoints(child, algorithm=algo),
                     "is_smoke": is_smoke,
                 })
     return {"runs": runs}
 
 
-def _list_checkpoints(run_dir: Path) -> list[str]:
+def _list_checkpoints(run_dir: Path, algorithm: str | None = None) -> list[dict[str, str]]:
     ckpt_dir = run_dir / "checkpoints"
     if not ckpt_dir.is_dir():
         return []
-    return sorted(p.name for p in ckpt_dir.iterdir() if p.suffix in (".pt", ".npz"))
+    if algorithm in {"dqn", "frozen_jepa_dqn"}:
+        suffix = ".pt"
+    elif algorithm == "linear_q":
+        suffix = ".npz"
+    else:
+        suffix = None
+    result: list[dict[str, str]] = []
+    for p in sorted(ckpt_dir.iterdir()):
+        if p.suffix not in (".pt", ".npz"):
+            continue
+        if suffix and p.suffix != suffix:
+            continue
+        label = p.stem.replace("_", " ")
+        result.append({"file": p.name, "label": label})
+    return result
 
 
 def _build_config_detail(config: ProjectConfig) -> list[dict[str, Any]]:
@@ -745,7 +1137,7 @@ def _build_config_detail(config: ProjectConfig) -> list[dict[str, Any]]:
         {
             "title": "agent",
             "fields": [
-                ("algorithm", config.agent.algorithm, "RL algorithm", {"type": "select", "options": ["dqn", "linear_q"]}),
+                ("algorithm", config.agent.algorithm, "RL algorithm", {"type": "select", "options": ["dqn", "frozen_jepa_dqn", "linear_q"]}),
                 ("gamma", config.agent.gamma, "Discount factor", {"type": "number", "min": 0, "max": 1, "step": 0.001}),
                 ("n_step", config.agent.n_step, "N-step return", {"type": "number", "min": 1}),
                 ("batch_size", config.agent.batch_size, "Batch size", {"type": "number", "min": 1}),
@@ -800,12 +1192,15 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
     with state.lock:
         job = state.job
         eval_job = state.eval_job
+        world_job = state.world_job
+        collect_job = state.collect_job
         run_dir = job.run_dir if job is not None else state.run_dir
     summary = _read_json(run_dir / "metrics" / "train_summary.json")
     events = _read_jsonl(run_dir / "metrics" / "train_events.jsonl")
     step_events = [event for event in events if event.get("type") == "step"]
     episode_events = [event for event in events if event.get("type") == "episode"]
     with state.lock:
+        live_step_events = list(state.live_step_events)
         job_payload = None
         if job is not None:
             job_payload = {
@@ -829,6 +1224,42 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
                 "result": eval_job.result,
                 "error": eval_job.error,
             }
+        world_job_payload = None
+        if world_job is not None:
+            world_job_payload = {
+                "status": world_job.status,
+                "run_name": world_job.run_name,
+                "run_dir": str(world_job.run_dir),
+                "requested_steps": world_job.requested_steps,
+                "error": world_job.error,
+                "started_at": world_job.started_at,
+                "completed_at": world_job.completed_at,
+                "running": world_job.thread.is_alive(),
+            }
+        collect_job_payload = None
+        if collect_job is not None:
+            collect_job_payload = {
+                "status": collect_job.status,
+                "run_name": collect_job.run_name,
+                "episodes_done": collect_job.episodes_done,
+                "episodes_target": collect_job.episodes_target,
+                "mean_score": collect_job.mean_score,
+                "error": collect_job.error,
+                "started_at": collect_job.started_at,
+                "completed_at": collect_job.completed_at,
+                "running": collect_job.thread.is_alive(),
+            }
+
+    if live_step_events:
+        merged_by_step = {
+            int(event["step"]): event
+            for event in step_events
+            if isinstance(event.get("step"), int)
+        }
+        for event in live_step_events:
+            if isinstance(event.get("step"), int):
+                merged_by_step[int(event["step"])] = event
+        step_events = [merged_by_step[key] for key in sorted(merged_by_step)]
 
     latest_step = step_events[-1] if step_events else {}
     payload: dict[str, Any] = {
@@ -840,7 +1271,7 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
                 (run_dir / "checkpoints" / "latest.pt").exists()
                 or (run_dir / "checkpoints" / "latest.npz").exists()
             ),
-            "checkpoints": _list_checkpoints(run_dir),
+            "checkpoints": _list_checkpoints(run_dir, algorithm=state.config.agent.algorithm),
         },
         "config": {
             "path": str(state.config_path),
@@ -866,6 +1297,8 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
         "config_detail": _build_config_detail(state.config),
         "job": job_payload,
         "eval": eval_payload,
+        "world_job": world_job_payload,
+        "collect_job": collect_job_payload,
         "summary": summary,
         "latest_step": latest_step,
         "steps": step_events[-500:],

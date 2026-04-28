@@ -1,3 +1,4 @@
+"""Training loop for frozen JEPA encoder + DQN Q-head."""
 from __future__ import annotations
 
 import copy
@@ -17,8 +18,14 @@ import torch.nn.functional as F
 
 from jepa_rl.envs.browser_game_env import BrowserGameEnv
 from jepa_rl.models.device import resolve_torch_device
-from jepa_rl.models.dqn import build_q_network, double_dqn_target
+from jepa_rl.models.dqn import double_dqn_target
+from jepa_rl.models.frozen_jepa_dqn import build_frozen_jepa_q_network
 from jepa_rl.replay.replay_buffer import ReplayBuffer, Transition
+from jepa_rl.training.pixel_dqn import (
+    _build_optimizer,
+    _env_context,
+    _save_render_frame,
+)
 from jepa_rl.utils.artifacts import create_run_dir
 from jepa_rl.utils.checkpoint import CheckpointPayload, load_torch_checkpoint, save_torch_checkpoint
 from jepa_rl.utils.config import ProjectConfig, snapshot_config
@@ -32,9 +39,11 @@ from jepa_rl.utils.metrics import (
     write_run_summary,
 )
 
+ALGORITHM = "frozen_jepa_dqn"
+
 
 @dataclass
-class DqnTrainSummary:
+class FrozenJepaDqnTrainSummary:
     run_dir: Path
     checkpoint: Path
     best_checkpoint: Path
@@ -47,40 +56,13 @@ class DqnTrainSummary:
     update_count: int
     target_update_count: int
     replay_size: int
-    weight_delta_norm: float
+    jepa_checkpoint: Path
 
 
-def _build_optimizer(config: ProjectConfig, params: Any) -> torch.optim.Optimizer:
-    opt_cfg = config.agent.optimizer
-    kwargs: dict[str, Any] = {"lr": opt_cfg.lr, "weight_decay": opt_cfg.weight_decay}
-    if opt_cfg.betas is not None:
-        kwargs["betas"] = opt_cfg.betas
-    if opt_cfg.type == "adam":
-        return torch.optim.Adam(params, **kwargs)
-    return torch.optim.AdamW(params, **kwargs)
-
-
-def _env_context(env: BrowserGameEnv) -> Any:
-    """Return the env as a context manager if it supports the protocol, else a no-op wrapper."""
-    if hasattr(env, "__enter__"):
-        return env
-    return _NullContext(env)
-
-
-class _NullContext:
-    def __init__(self, env: BrowserGameEnv) -> None:
-        self._env = env
-
-    def __enter__(self) -> BrowserGameEnv:
-        return self._env
-
-    def __exit__(self, *exc: object) -> None:
-        pass
-
-
-def train_dqn(
+def train_frozen_jepa_dqn(
     config: ProjectConfig,
     *,
+    jepa_checkpoint: Path,
     experiment: str | None = None,
     steps: int,
     learning_starts: int | None = None,
@@ -92,13 +74,16 @@ def train_dqn(
     resume_checkpoint: Path | None = None,
     screenshot_path: Path | None = None,
     live_step_callback: Callable[[dict[str, Any]], None] | None = None,
-) -> DqnTrainSummary:
+) -> FrozenJepaDqnTrainSummary:
     if steps <= 0:
         raise ValueError("steps must be positive")
     if dashboard_every < 0:
         raise ValueError("dashboard_every must be nonnegative")
 
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+    run_dir = create_run_dir(config.experiment.output_dir, experiment or config.experiment.name)
+    snapshot_config(config, run_dir / "config.yaml")
 
     if env_factory is None:
         from jepa_rl.browser.playwright_env import PlaywrightBrowserGameEnv
@@ -111,8 +96,7 @@ def train_dqn(
     device = resolve_torch_device(config.experiment.device)
     if config.experiment.precision != "fp32" and device.type == "mps":
         warnings.warn(
-            f"fp16/bf16 on MPS is unsupported; using fp32 instead "
-            f"(config.experiment.precision={config.experiment.precision!r})",
+            "fp16/bf16 on MPS is unsupported; using fp32 instead",
             stacklevel=2,
         )
 
@@ -123,28 +107,20 @@ def train_dqn(
     if device.type == "mps" and hasattr(torch.mps, "manual_seed"):
         torch.mps.manual_seed(seed)
 
-    run_name = experiment or config.experiment.name
-    run_dir = create_run_dir(config.experiment.output_dir, run_name)
-    snapshot_config(config, run_dir / "config.yaml")
-
     metrics_path = run_dir / "metrics" / "train_events.jsonl"
     summary_path = run_dir / "metrics" / "train_summary.json"
     checkpoint_path = run_dir / "checkpoints" / "latest.pt"
     best_checkpoint_path = run_dir / "checkpoints" / "best.pt"
 
-    online_net = build_q_network(config, num_actions=config.actions.num_actions).to(device)
+    online_net = build_frozen_jepa_q_network(
+        config, num_actions=config.actions.num_actions, jepa_checkpoint_path=jepa_checkpoint
+    ).to(device)
     target_net = copy.deepcopy(online_net)
     for p in target_net.parameters():
         p.requires_grad_(False)
 
-    optimizer = _build_optimizer(config, online_net.parameters())
+    optimizer = _build_optimizer(config, online_net.trainable_parameters)
     replay = ReplayBuffer(capacity=config.replay.capacity)
-
-    if config.replay.prioritized:
-        warnings.warn(
-            "replay.prioritized=true is not implemented in Phase 5; using uniform replay.",
-            stacklevel=2,
-        )
 
     effective_learning_starts = (
         learning_starts if learning_starts is not None else config.agent.learning_starts
@@ -152,7 +128,6 @@ def train_dqn(
     effective_batch_size = batch_size if batch_size is not None else config.agent.batch_size
     checkpoint_every = config.training.checkpoint_interval_steps
 
-    # State that can be restored from a checkpoint
     start_step = 0
     episode_id = 0
     best_score = float("-inf")
@@ -177,11 +152,14 @@ def train_dqn(
         online_net = online_net.to(device)
         target_net = target_net.to(device)
 
-    initial_conv_weight = online_net.encoder.backbone[0].weight.detach().clone().cpu()
+    # Track Q-head weight drift (encoder is frozen)
+    q_head_params = [p.detach().clone() for p in online_net.trainable_parameters]
 
     def _weight_delta() -> float:
-        diff = online_net.encoder.backbone[0].weight.detach().cpu() - initial_conv_weight
-        return diff.norm().item()
+        total = 0.0
+        for orig, cur in zip(q_head_params, online_net.trainable_parameters, strict=False):
+            total += (cur.detach().cpu() - orig).norm().item()
+        return total
 
     losses: list[float] = []
     td_errors: list[float] = []
@@ -273,7 +251,9 @@ def train_dqn(
                         optimizer.zero_grad()
                         loss.backward()
                         grad_norm_val = float(
-                            torch.nn.utils.clip_grad_norm_(online_net.parameters(), 10.0).item()
+                            torch.nn.utils.clip_grad_norm_(
+                                online_net.trainable_parameters, 10.0
+                            ).item()
                         )
                         optimizer.step()
 
@@ -382,7 +362,6 @@ def train_dqn(
                         config,
                     )
 
-    # Final checkpoint and summary
     final_step = start_step + steps
     final_score = best_score if best_score != float("-inf") else episode_score
     mean_loss = float(np.mean(losses)) if losses else 0.0
@@ -437,7 +416,7 @@ def train_dqn(
     )
     dashboard_path = write_training_dashboard(run_dir)
 
-    return DqnTrainSummary(
+    return FrozenJepaDqnTrainSummary(
         run_dir=run_dir,
         checkpoint=checkpoint_path,
         best_checkpoint=best_checkpoint_path,
@@ -450,13 +429,14 @@ def train_dqn(
         update_count=update_count,
         target_update_count=target_update_count,
         replay_size=len(replay),
-        weight_delta_norm=wdn,
+        jepa_checkpoint=jepa_checkpoint,
     )
 
 
-def evaluate_dqn(
+def evaluate_frozen_jepa_dqn(
     config: ProjectConfig,
     *,
+    jepa_checkpoint: Path,
     checkpoint: Path,
     episodes: int,
     headless: bool | None = None,
@@ -476,7 +456,9 @@ def evaluate_dqn(
             )
 
     device = resolve_torch_device(config.experiment.device)
-    online_net = build_q_network(config, num_actions=config.actions.num_actions).to(device)
+    online_net = build_frozen_jepa_q_network(
+        config, num_actions=config.actions.num_actions, jepa_checkpoint_path=jepa_checkpoint
+    ).to(device)
     load_torch_checkpoint(checkpoint, model=online_net, target_model=None, optimizer=None)
     online_net.eval()
 
@@ -519,37 +501,6 @@ def evaluate_dqn(
         "median_score": float(np.median(scores)),
         "p95_score": float(np.percentile(scores, 95)),
     }
-
-
-def _save_render_frame(env: BrowserGameEnv, fallback_data: np.ndarray, path: Path) -> None:
-    try:
-        from PIL import Image as PILImage
-
-        frame = env.render_video_frame()
-        PILImage.fromarray(frame.astype(np.uint8), "RGB").save(path)
-    except Exception:  # noqa: BLE001
-        _save_obs_frame(fallback_data, path)
-
-
-def _save_obs_frame(data: np.ndarray, path: Path) -> None:
-    try:
-        from PIL import Image as PILImage
-
-        arr = data  # (C, H, W) channel-first from PlaywrightBrowserGameEnv
-        if arr.ndim == 3:
-            c = arr.shape[0]
-            if c >= 3:
-                frame: np.ndarray = arr[-3:].transpose(1, 2, 0)  # (3,H,W) → (H,W,3)
-                mode = "RGB"
-            else:
-                frame = arr[-1]  # (H,W) last stacked grayscale frame
-                mode = "L"
-        else:
-            frame = arr
-            mode = "L"
-        PILImage.fromarray(frame.astype(np.uint8), mode).save(path)
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _save_ckpt(
@@ -603,7 +554,7 @@ def _update_summary(
     started_at: float,
 ) -> None:
     summary = build_run_summary(
-        algorithm="pixel_dqn",
+        algorithm=ALGORITHM,
         steps=steps,
         requested_steps=requested_steps,
         status=status,

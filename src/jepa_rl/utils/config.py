@@ -559,8 +559,8 @@ class AgentConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentConfig:
         algorithm = _str(data.get("algorithm", "dqn"), "agent.algorithm")
-        if algorithm not in {"dqn", "linear_q"}:
-            raise ConfigError("agent.algorithm must be dqn or linear_q")
+        if algorithm not in {"dqn", "frozen_jepa_dqn", "linear_q"}:
+            raise ConfigError("agent.algorithm must be dqn, frozen_jepa_dqn, or linear_q")
         gamma = _positive_float(data.get("gamma", 0.997), "agent.gamma")
         if gamma >= 1.0:
             raise ConfigError("agent.gamma must be < 1.0")
@@ -678,6 +678,7 @@ class TrainingConfig:
     checkpoint_interval_steps: int
     planning_start_step: int
     planning_eval_only_until: int
+    eval_budgets: tuple[int, ...]
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TrainingConfig:
@@ -709,6 +710,10 @@ class TrainingConfig:
             ),
             planning_eval_only_until=_nonnegative_int(
                 data.get("planning_eval_only_until", 0), "training.planning_eval_only_until"
+            ),
+            eval_budgets=tuple(
+                _positive_int(v, "training.eval_budgets")
+                for v in data.get("eval_budgets", [100_000, 500_000, 1_000_000, 5_000_000])
             ),
         )
 

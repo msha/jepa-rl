@@ -86,6 +86,8 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         self._steps = 0
         self._recorder: EpisodeRecorder | None = None
         self._episode_index = 0
+        self._reset_failures: int = 0
+        self._score_failures: int = 0
         if record_video or config.recording.enabled:
             self._recorder = EpisodeRecorder(fps=config.recording.fps)
 
@@ -176,6 +178,7 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
                     timeout=self.config.game.reset_timeout_sec * 1000,
                 )
         except Exception as exc:
+            self._reset_failures += 1
             logger.warning(
                 "Reset failed for game URL %s (timeout=%.1fs): %s",
                 game_url,
@@ -239,10 +242,19 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
                 raise BrowserEnvError(f"Could not parse score from {selector!r}: {text!r}")
             return float(match.group(0))
         except Exception as exc:
+            self._score_failures += 1
             logger.warning("Score reading failed at step %d: %s", self._steps, exc)
             if self._run_dir is not None:
                 self._save_score_failure_screenshot()
             raise
+
+    @property
+    def reset_failures(self) -> int:
+        return self._reset_failures
+
+    @property
+    def score_failures(self) -> int:
+        return self._score_failures
 
     def is_done(self) -> bool:
         if self._steps >= self.config.game.max_steps_per_episode:

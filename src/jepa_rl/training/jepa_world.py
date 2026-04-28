@@ -114,7 +114,8 @@ def train_jepa_world(
         start_step = payload.step
 
     effective_batch_size = batch_size if batch_size is not None else config.agent.batch_size
-    sequence_length = max(model_config.horizons) + 1
+    action_chunk_size = config.world_model.predictor.action_chunk_size
+    sequence_length = max(model_config.horizons) * action_chunk_size + 1
 
     # Collect random data into replay buffer
     effective_collect_steps = (
@@ -142,7 +143,8 @@ def train_jepa_world(
 
             actual_step = grad_step + 1
             batch = _make_batch_from_replay(
-                replay, effective_batch_size, sequence_length, model_config, device, py_rng
+                replay, effective_batch_size, sequence_length, model_config, device, py_rng,
+                action_chunk_size=action_chunk_size,
             )
 
             model.train()
@@ -287,6 +289,8 @@ def _make_batch_from_replay(
     model_config: JepaWorldModelConfig,
     device: torch.device,
     py_rng: random.Random,
+    *,
+    action_chunk_size: int = 1,
 ) -> JepaBatch:
     max_horizon = max(model_config.horizons)
     sequences = replay.sample_sequence(
@@ -303,15 +307,18 @@ def _make_batch_from_replay(
     context_obs = torch.from_numpy(
         np.stack([seq[0].obs for seq in sequences])
     ).to(device)
+    # Each predicted step h corresponds to primitive step h * action_chunk_size.
+    # The action for step h is the action taken at the start of that chunk,
+    # i.e. at primitive index h * action_chunk_size.
     actions = torch.tensor(
-        [[seq[t].action for t in range(max_horizon)] for seq in sequences],
+        [[seq[h * action_chunk_size].action for h in range(max_horizon)] for seq in sequences],
         dtype=torch.long,
         device=device,
     )
     target_obs: dict[int, torch.Tensor] = {}
     for horizon in model_config.horizons:
         target_obs[horizon] = torch.from_numpy(
-            np.stack([seq[horizon].obs for seq in sequences])
+            np.stack([seq[horizon * action_chunk_size].obs for seq in sequences])
         ).to(device)
 
     return JepaBatch(context_obs=context_obs, target_obs=target_obs, actions=actions)

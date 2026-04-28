@@ -1,7 +1,25 @@
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount, onMounted } from 'vue'
 import { usePolling } from '../composables/usePolling'
+import { useConfigStore } from '../stores/config'
 import type { Job, EvalJob } from '../stores/training'
+
+const configStore = useConfigStore()
+const selectedConfig = ref('')
+
+onMounted(async () => {
+  await configStore.loadConfigs()
+  selectedConfig.value = configStore.currentPath
+})
+
+async function onConfigChange() {
+  if (!selectedConfig.value) return
+  try {
+    await configStore.switchConfig(selectedConfig.value)
+  } catch (e) {
+    console.error(e)
+  }
+}
 
 const props = defineProps<{
   job: Job | null
@@ -32,9 +50,14 @@ const gameTitle = computed(() => {
   return 'game view'
 })
 
+const currentTrainingStep = computed(() => {
+  const last = props.steps[props.steps.length - 1]
+  return typeof last?.step === 'number' ? last.step : 0
+})
+
 const gameStatus = computed(() => {
   if (evalClientError.value) return `eval error: ${evalClientError.value}`
-  if (isTraining.value) return `training · step ${props.job?.requested_steps ?? 0}`
+  if (isTraining.value) return `training · step ${currentTrainingStep.value}/${props.job?.requested_steps ?? 0}`
   if (isEvaluating.value) {
     const episode = (props.evalJob?.episode_count ?? 0) + 1
     const target = props.evalJob?.episodes_target ?? 0
@@ -293,11 +316,37 @@ function fmtNum(v: unknown): string {
   if (Math.abs(v) >= 10) return v.toFixed(2)
   return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
 }
+
+// Open game in a visible browser window
+const openGameSeconds = ref(10)
+const openGameRandomSteps = ref(0)
+const openGameHold = ref(false)
+const openGameStatus = ref('')
+const openGameExpanded = ref(false)
+
+async function openInBrowser() {
+  openGameStatus.value = ''
+  try {
+    const res = await fetch('/api/open-game', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seconds: openGameSeconds.value, random_steps: openGameRandomSteps.value, hold: openGameHold.value }),
+    })
+    const data = await res.json() as { ok?: boolean; error?: string }
+    if (!data.ok) throw new Error(data.error || 'failed')
+    openGameStatus.value = openGameHold.value ? 'opened (hold mode — close manually)' : `opened for ${openGameSeconds.value}s`
+  } catch (e) {
+    openGameStatus.value = `error: ${e instanceof Error ? e.message : String(e)}`
+  }
+}
 </script>
 
 <template>
   <div :class="sectionClass" id="gameSection">
     <div class="game-header">
+      <select v-model="selectedConfig" @change="onConfigChange" class="gh-config" title="Available game configs in configs/games/">
+        <option v-for="c in configStore.configs" :key="c.path" :value="c.path">{{ c.name }}</option>
+      </select>
       <span class="gh-title" id="gameTitle">{{ gameTitle }}</span>
       <span class="gh-status" id="gameStatus">{{ gameStatus }}</span>
       <span class="gh-stat" id="gameStats" v-html="gameStats"></span>
@@ -315,6 +364,15 @@ function fmtNum(v: unknown): string {
       <button @click="gameAction('space')" title="Send Space">serve</button>
       <button @click="gameAction('right')" title="Send ArrowRight">right &#9654;</button>
       <button @click="gameAction('reset')" title="Send R">reset</button>
+      <span class="ctrl-sep"></span>
+      <button class="btn-tiny" @click="openGameExpanded = !openGameExpanded" title="Open game in a visible Chromium window">open in browser</button>
+    </div>
+    <div v-if="openGameExpanded" class="open-game-panel">
+      <div class="field">secs <input v-model.number="openGameSeconds" type="number" min="1" style="width:48px" /></div>
+      <div class="field">rand steps <input v-model.number="openGameRandomSteps" type="number" min="0" style="width:48px" /></div>
+      <label class="tc-check"><input type="checkbox" v-model="openGameHold" /> hold</label>
+      <button class="btn-accent" @click="openInBrowser">open</button>
+      <span v-if="openGameStatus" class="open-game-status">{{ openGameStatus }}</span>
     </div>
   </div>
 </template>

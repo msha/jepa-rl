@@ -40,7 +40,7 @@ Implemented now:
 - `jepa-rl train` for the current NumPy linear pixel-Q smoke model.
 - `jepa-rl eval` for the current `.npz` smoke-model checkpoints.
 - Typed config validation and starter configs.
-- Local Breakout-like HTML game at `games/breakout/index.html`.
+- Local HTML games at `games/<name>/index.html`: breakout, snake, asteroids.
 - Playwright screenshot environment and DOM score reader.
 - Discrete keyboard action parsing.
 - In-memory replay buffer and sequence sampling.
@@ -89,6 +89,26 @@ Do not add features that violate these constraints without explicit user approva
 - No personal browser sessions. Use isolated browser contexts and dedicated profiles only.
 - No game source code as privileged input. The agent learns from pixels and, where configured, DOM text for score/state readers.
 - No hardcoded experiment behavior that belongs in config.
+
+## Game Implementation Standard
+
+Games live in `games/<name>/index.html` as single self-contained HTML files. All games share an identical DOM contract and visual template — see `CLAUDE.md "Game Implementation Standard"` for the full specification including HTML structure, CSS, required JS functions, color palette, and YAML config format.
+
+When adding a new game:
+
+1. Copy `games/breakout/index.html` as the starting point.
+2. Keep the `<header>`, `#score`, `#lives`, `#status[data-state]` DOM structure and the CSS verbatim — only change `<title>` and `<h1>` text.
+3. Implement the required JS functions: `setDone`, `updateStats`, `resetGame`, `update`, `draw`, `loop`, `isAI`, `loadBoard`, `saveToBoard`, `drawBoard`.
+4. Define a `DESCRIPTION` constant — one-line game summary shown on the start screen.
+5. Use the standard color palette (`#07090d` bg, `#f4f6fb` player, `#27d6a0` positive, `#ff5a7a` danger, `#ffd166` accent, `#c0c8d8` neutral).
+6. Start with 3 lives, Space to begin, R to restart, arrow keys for movement.
+7. Include a difficulty progression mechanism (increasing speed, more enemies, harder obstacles).
+8. Score increments on discrete events (not per-frame), with coarse values (+10, +20, +50, +100).
+9. Include a highscore board (localStorage, `jeparl_<game>_scores` key) that tags scores as HUMAN or AI based on `?embed` URL param. Show top 5 on start screen and game-over screen.
+10. Create `configs/games/<name>.yaml` extending `../base.yaml` and `../presets/small.yaml`.
+11. Verify with `uv run jepa-rl validate-config --config configs/games/<name>.yaml`.
+
+Existing games: `breakout`, `snake`, `asteroids`.
 
 ## Configuration-First Discipline
 

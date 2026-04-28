@@ -1,5 +1,33 @@
 import { watch, type Ref } from 'vue'
 
+const ACCENT_HUES: Record<string, string> = {
+  '#5d9e5d': '#48c9a0',
+  '#4e89ba': '#8b5ecf',
+  '#bfa03e': '#d4764e',
+  '#b9524c': '#cf5e8b',
+}
+
+let noisePattern: CanvasPattern | null = null
+function getNoise(ctx: CanvasRenderingContext2D) {
+  if (noisePattern) return noisePattern
+  const c = document.createElement('canvas')
+  c.width = 128
+  c.height = 128
+  const cx = c.getContext('2d')
+  if (!cx) return null
+  const img = cx.createImageData(128, 128)
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = Math.random() * 255
+    img.data[i] = v
+    img.data[i + 1] = v
+    img.data[i + 2] = v
+    img.data[i + 3] = 10 // Subtle noise alpha
+  }
+  cx.putImageData(img, 0, 0)
+  noisePattern = ctx.createPattern(c, 'repeat')
+  return noisePattern
+}
+
 export function useChart(canvasRef: Ref<HTMLCanvasElement | null>, points: Ref<[number, number][]>, color: Ref<string>) {
   function draw() {
     const canvas = canvasRef.value
@@ -26,57 +54,192 @@ export function useChart(canvasRef: Ref<HTMLCanvasElement | null>, points: Ref<[
 
     const xs = pts.map(p => p[0])
     const ys = pts.map(p => p[1]).filter(Number.isFinite)
-    let minY = Math.min(...ys)
-    let maxY = Math.max(...ys)
-    if (!Number.isFinite(minY)) return
-    if (maxY - minY < 1e-9) { minY -= 1; maxY += 1 }
+    let dataMinY = Math.min(...ys)
+    let dataMaxY = Math.max(...ys)
+    if (!Number.isFinite(dataMinY)) return
+    if (dataMaxY - dataMinY < 1e-9) { dataMinY -= 1; dataMaxY += 1 }
     const minX = Math.min(...xs)
     const maxX = Math.max(...xs)
 
-    const px = (x: number) => ((x - minX) / Math.max(1, maxX - minX)) * w
+    const yRange = dataMaxY - dataMinY
+    const minY = dataMinY - yRange * 0.1
+    const maxY = dataMaxY + yRange * 0.15
+
+    const dataRangeX = Math.max(1, maxX - minX)
+    const projMaxX = pts.length >= 8 ? maxX + dataRangeX * 0.15 : maxX
+
+    const px = (x: number) => ((x - minX) / Math.max(1, projMaxX - minX)) * w
     const py = (y: number) => h - ((y - minY) / (maxY - minY)) * h
 
-    // Fill
-    ctx.beginPath()
-    pts.forEach(([x, y], i) => {
-      if (i === 0) ctx.moveTo(px(x), py(y))
-      else ctx.lineTo(px(x), py(y))
-    })
-    ctx.lineTo(px(xs[xs.length - 1]), h)
-    ctx.lineTo(px(xs[0]), h)
-    ctx.closePath()
-    const grad = ctx.createLinearGradient(0, 0, 0, h)
-    grad.addColorStop(0, hexRgba(color.value, 0.15))
-    grad.addColorStop(1, hexRgba(color.value, 0.01))
-    ctx.fillStyle = grad
-    ctx.fill()
+    const accent = ACCENT_HUES[color.value] || color.value
 
-    // Line
-    ctx.strokeStyle = color.value
-    ctx.lineWidth = 1.8
+    // Subtle grid lines with a bit of gradient
+    const gridGrad = ctx.createLinearGradient(0, 0, w, 0)
+    gridGrad.addColorStop(0, 'rgba(255,255,255,0.01)')
+    gridGrad.addColorStop(0.5, 'rgba(255,255,255,0.05)')
+    gridGrad.addColorStop(1, 'rgba(255,255,255,0.01)')
+    ctx.strokeStyle = gridGrad
+    ctx.lineWidth = 1
+    ctx.setLineDash([2, 4])
+    for (let i = 1; i < 4; i++) {
+      const gy = h * i / 4
+      ctx.beginPath()
+      ctx.moveTo(0, gy)
+      ctx.lineTo(w, gy)
+      ctx.stroke()
+    }
+    ctx.setLineDash([])
+
+    // Path for the main line
+    const linePath = new Path2D()
+    pts.forEach(([x, y], i) => {
+      if (i === 0) linePath.moveTo(px(x), py(y))
+      else linePath.lineTo(px(x), py(y))
+    })
+
+    // Gradient fill with noise
+    const fillPath = new Path2D(linePath)
+    fillPath.lineTo(px(xs[xs.length - 1]), h + 10)
+    fillPath.lineTo(px(xs[0]), h + 10)
+    fillPath.closePath()
+
+    // 1. Extra Base Gradient
+    const fillGrad = ctx.createLinearGradient(0, 0, 0, h)
+    fillGrad.addColorStop(0, hexRgba(accent, 0.35))
+    fillGrad.addColorStop(0.3, hexRgba(color.value, 0.15))
+    fillGrad.addColorStop(0.8, hexRgba(color.value, 0.02))
+    fillGrad.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = fillGrad
+    ctx.fill(fillPath)
+
+    // 2. Subtle Noise Overlay
+    const noise = getNoise(ctx)
+    if (noise) {
+      ctx.globalCompositeOperation = 'overlay'
+      ctx.fillStyle = noise
+      ctx.fill(fillPath)
+      ctx.globalCompositeOperation = 'source-over'
+    }
+
+    // Trendline & estimates
+    if (pts.length >= 8) {
+      const { slope, intercept } = linReg(pts)
+
+      // Confidence / Estimate band around trend
+      const spread = yRange * 0.15
+      ctx.fillStyle = hexRgba(color.value, 0.03)
+      ctx.beginPath()
+      ctx.moveTo(px(minX), py(slope * minX + intercept + spread))
+      ctx.lineTo(px(projMaxX), py(slope * projMaxX + intercept + spread * 1.5))
+      ctx.lineTo(px(projMaxX), py(slope * projMaxX + intercept - spread * 1.5))
+      ctx.lineTo(px(minX), py(slope * minX + intercept - spread))
+      ctx.closePath()
+      ctx.fill()
+
+      // Main Trendline
+      ctx.save()
+      ctx.setLineDash([4, 6])
+      ctx.strokeStyle = hexRgba(color.value, 0.4)
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.moveTo(px(minX), py(slope * minX + intercept))
+      ctx.lineTo(px(maxX), py(slope * maxX + intercept))
+      ctx.stroke()
+
+      // Projection Trendline
+      ctx.setLineDash([2, 4])
+      ctx.strokeStyle = hexRgba(accent, 0.3)
+      ctx.beginPath()
+      ctx.moveTo(px(maxX), py(slope * maxX + intercept))
+      ctx.lineTo(px(projMaxX), py(slope * projMaxX + intercept))
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    // Line with extra gradient stroke and glow
+    ctx.save()
+    ctx.shadowColor = hexRgba(color.value, 0.6)
+    ctx.shadowBlur = 8
+
+    const lineStrokeGrad = ctx.createLinearGradient(0, 0, w, 0)
+    lineStrokeGrad.addColorStop(0, color.value)
+    lineStrokeGrad.addColorStop(0.5, accent)
+    lineStrokeGrad.addColorStop(1, color.value)
+    
+    ctx.strokeStyle = lineStrokeGrad
+    ctx.lineWidth = 2
     ctx.lineJoin = 'round'
     ctx.lineCap = 'round'
-    ctx.beginPath()
-    pts.forEach(([x, y], i) => {
-      if (i === 0) ctx.moveTo(px(x), py(y))
-      else ctx.lineTo(px(x), py(y))
-    })
-    ctx.stroke()
+    ctx.stroke(linePath)
+    ctx.restore()
 
-    // Last point marker
+    // Checkpoints: Min, Max
+    let maxPt = pts[0], minPt = pts[0]
+    pts.forEach(p => {
+      if (p[1] > maxPt[1]) maxPt = p
+      if (p[1] < minPt[1]) minPt = p
+    })
+
+    const drawCheckpoint = (pt: [number, number], c: string) => {
+      const cx = px(pt[0])
+      const cy = py(pt[1])
+      
+      // Outer glow
+      ctx.beginPath()
+      ctx.arc(cx, cy, 5, 0, Math.PI * 2)
+      ctx.fillStyle = hexRgba(c, 0.3)
+      ctx.fill()
+      
+      // Inner dot
+      ctx.beginPath()
+      ctx.arc(cx, cy, 2, 0, Math.PI * 2)
+      ctx.fillStyle = c
+      ctx.fill()
+    }
+
+    if (maxPt && dataMaxY - dataMinY > 0) drawCheckpoint(maxPt, accent)
+    if (minPt && dataMaxY - dataMinY > 0 && minPt !== maxPt) drawCheckpoint(minPt, color.value)
+
+    // Last-point marker with animated/cool ring
     const last = pts[pts.length - 1]
+    const lx = px(last[0])
+    const ly = py(last[1])
+    
+    // Pulse ring
     ctx.beginPath()
-    ctx.arc(px(last[0]), py(last[1]), 3, 0, Math.PI * 2)
-    ctx.fillStyle = color.value
+    ctx.arc(lx, ly, 8, 0, Math.PI * 2)
+    ctx.fillStyle = hexRgba(accent, 0.15)
+    ctx.fill()
+    
+    ctx.beginPath()
+    ctx.arc(lx, ly, 4, 0, Math.PI * 2)
+    ctx.fillStyle = hexRgba(color.value, 0.8)
+    ctx.fill()
+    
+    ctx.beginPath()
+    ctx.arc(lx, ly, 1.5, 0, Math.PI * 2)
+    ctx.fillStyle = '#ffffff'
     ctx.fill()
 
-    // Min/max labels
-    ctx.fillStyle = '#7d7870'
-    ctx.font = "9px 'IBM Plex Mono', monospace"
+    // Labels with background pills for cool look
+    ctx.font = "10px 'IBM Plex Mono', monospace"
+    ctx.textBaseline = 'middle'
+    
+    const maxText = fmt(dataMaxY)
+    const maxW = ctx.measureText(maxText).width
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'
+    ctx.fillRect(4, 4, maxW + 8, 16)
     ctx.textAlign = 'left'
-    ctx.fillText(fmt(maxY), 3, 9)
+    ctx.fillStyle = hexRgba(accent, 0.9)
+    ctx.fillText(maxText, 8, 12)
+
+    const minText = fmt(dataMinY)
+    const minW = ctx.measureText(minText).width
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'
+    ctx.fillRect(w - minW - 12, h - 20, minW + 8, 16)
     ctx.textAlign = 'right'
-    ctx.fillText(fmt(minY), w - 3, h - 3)
+    ctx.fillStyle = '#7d7870'
+    ctx.fillText(minText, w - 8, h - 12)
   }
 
   watch([points, color], draw)
@@ -84,10 +247,26 @@ export function useChart(canvasRef: Ref<HTMLCanvasElement | null>, points: Ref<[
 }
 
 function hexRgba(hex: string, a: number): string {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
+  if (!hex) return `rgba(255,255,255,${a})`
+  let normalizedHex = hex
+  if (hex.length === 4) {
+    normalizedHex = '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3]
+  }
+  const r = parseInt(normalizedHex.slice(1, 3), 16) || 0
+  const g = parseInt(normalizedHex.slice(3, 5), 16) || 0
+  const b = parseInt(normalizedHex.slice(5, 7), 16) || 0
   return `rgba(${r},${g},${b},${a})`
+}
+
+function linReg(pts: [number, number][]): { slope: number; intercept: number } {
+  const n = pts.length
+  let sx = 0, sy = 0, sxy = 0, sxx = 0
+  for (const [x, y] of pts) { sx += x; sy += y; sxy += x * y; sxx += x * x }
+  const denom = n * sxx - sx * sx
+  if (Math.abs(denom) < 1e-12) return { slope: 0, intercept: sy / n }
+  const slope = (n * sxy - sx * sy) / denom
+  const intercept = (sy - slope * sx) / n
+  return { slope, intercept }
 }
 
 function fmt(v: number): string {

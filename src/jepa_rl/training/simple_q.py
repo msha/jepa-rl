@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -163,6 +164,7 @@ def train_linear_q(
     dashboard_every: int = 25,
     stop_event: Event | None = None,
     screenshot_path: Path | None = None,
+    live_step_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> TrainSummary:
     if steps <= 0:
         raise ValueError("steps must be positive")
@@ -276,6 +278,8 @@ def train_linear_q(
                     "weight_delta_norm": weight_delta_norm,
                 }
                 metrics.write(json.dumps(event) + "\n")
+                if live_step_callback is not None:
+                    live_step_callback(event)
 
                 obs = result.observation
                 if result.done:
