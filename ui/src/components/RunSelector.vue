@@ -25,11 +25,7 @@ function cancelNew() {
 function confirmNew() {
   const name = newRunName.value.trim()
   if (!name) return
-  runs.selectedRun = ''
-  runs.checkpoints = []
-  runs.runDir = ''
-  runs.runConfigDetail = null
-  runs.$patch && runs.$patch({})
+  runs.clearSelection()
   // Dispatch custom event so TrainControls can pick up the new name
   window.dispatchEvent(new CustomEvent('new-run', { detail: { name } }))
   showNewModal.value = false

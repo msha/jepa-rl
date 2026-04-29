@@ -491,3 +491,38 @@ Definition of done:
 - Latent geometry is shaped by `L_value_shape` without collapse.
 - Planner-improved score is measurably higher than policy-only score on the initial benchmark.
 - Planning latency is documented per decision and per evaluation episode.
+
+## Phase 18: Fast Data Collection
+
+### 18a: High-Refresh-Rate Speed Multiplier
+
+All three games use delta-time / wall-clock-based logic, so running at a higher monitor refresh rate naturally speeds up data collection without changing game difficulty. At 120 Hz with `action_repeat: 4` you get 4× more observations per second; at 240 Hz, 8×.
+
+- [ ] P2 Add `game.speed_multiplier` config (e.g. `1`, `2`, `4`, `8`, `16`).
+- [ ] P2 Inject a small script at page load that wraps `requestAnimationFrame` to fire N times per real frame, effectively multiplying the game's tick rate.
+- [ ] P2 Validate that `speed_multiplier > 1` requires the monitor refresh rate to actually support it (warn but don't block).
+- [ ] P2 Verify that all three games remain physically correct (delta-time preserved) at each multiplier level.
+- [ ] P2 Log effective observed tick rate alongside configured multiplier so drift is visible.
+- [ ] P2 Cap `speed_multiplier` at 16× in config validation — beyond that Playwright screenshot latency becomes the bottleneck.
+
+Definition of done:
+
+- At `speed_multiplier: 4`, replay buffer fills 4× faster in wall-clock time.
+- Game difficulty curve is unchanged (ball speed, snake interval, asteroid count all identical in wall-clock terms).
+
+### 18b: Parallel Game Instances
+
+Run N browser game instances simultaneously, each feeding transitions into the shared replay buffer. Displayed as a grid of iframes in the UI.
+
+- [ ] P2 Add `collection.num_workers` config (default `1`).
+- [ ] P2 Launch N Playwright browser contexts in separate threads, each running an independent episode loop.
+- [ ] P2 All workers write to a single shared replay buffer protected by a lock (or use a thread-safe queue).
+- [ ] P2 Each worker gets its own episode ID namespace so sequences don't collide.
+- [ ] P2 UI: add a "Workers" grid view — N iframes in a CSS grid, each showing its game instance live.
+- [ ] P2 UI: show per-worker episode count and mean score in the grid.
+- [ ] P2 Combine with `speed_multiplier` — e.g. 4 workers × 4× speed = 16× data throughput.
+
+Definition of done:
+
+- 4 parallel workers fill the replay buffer 4× faster than a single worker.
+- UI grid renders all instances without layout breakage at 1, 2, 4, and 8 workers.

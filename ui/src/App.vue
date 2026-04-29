@@ -4,6 +4,7 @@ import MetricsGrid from './components/MetricsGrid.vue'
 import ChartPanel from './components/ChartPanel.vue'
 import GameSection from './components/GameSection.vue'
 import GameSettings from './components/GameSettings.vue'
+import HighScoreBoard from './components/HighScoreBoard.vue'
 import TrainControls from './components/TrainControls.vue'
 import ConfigPanel from './components/ConfigPanel.vue'
 import EpisodesTable from './components/EpisodesTable.vue'
@@ -23,10 +24,15 @@ const playerName = ref('')
 usePolling(() => training.refresh(), 300)
 usePolling(() => runs.loadRuns(), 5000)
 
-onMounted(() => {
-  config.loadConfigs()
-  runs.loadRuns()
-  training.refresh()
+onMounted(async () => {
+  await config.loadConfigs()
+  await training.refresh()
+  await runs.loadRuns()
+  const activeRun = training.runDir?.name
+  if (!runs.selectedRun && activeRun && runs.runs.some(r => r.name === activeRun)) {
+    await runs.loadRunDetail(activeRun)
+    await training.refresh()
+  }
 })
 </script>
 
@@ -52,13 +58,16 @@ onMounted(() => {
       <GameSection
         :job="training.job"
         :eval-job="training.evalJob"
+        :collect-job="training.collectJob"
         :reset-key="training.resetKey"
         :action-keys="training.actionKeys"
         :steps="training.steps"
         :player-name="playerName"
+        :model-info="training.modelInfo"
         @highscores="highscores = $event"
       />
-      <GameSettings :settings="training.gameSettings" :highscores="highscores" @update:player-name="playerName = $event" />
+      <GameSettings :settings="training.gameSettings" />
+      <HighScoreBoard :highscores="highscores" @update:player-name="playerName = $event" />
     </div>
     <div class="col col-right">
       <TrainControls :job="training.job" :eval-job="training.evalJob" :summary="training.summary" :latest-step="training.latestStep" />

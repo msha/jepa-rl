@@ -27,6 +27,7 @@ export interface EvalJob {
 export interface CollectJob {
   status: string
   run_name: string
+  run_dir: string
   episodes_done: number
   episodes_target: number
   mean_score: number
@@ -46,10 +47,12 @@ export const useTrainingStore = defineStore('training', () => {
   const worldJob = ref<Job | null>(null)
   const collectJob = ref<CollectJob | null>(null)
   const gameSettings = ref<[string, unknown][]>([])
+  const baseConfigDetail = ref<ConfigGroup[]>([])
   const configDetail = ref<ConfigGroup[]>([])
   const runDir = ref<{ name: string; dir: string; has_checkpoint: boolean; checkpoints: { file: string; label: string }[] } | null>(null)
   const resetKey = ref('Space')
   const actionKeys = ref<string[]>([])
+  const baseModelInfo = ref<Record<string, unknown>>({})
   const modelInfo = ref<Record<string, unknown>>({})
   const gameName = ref('')
 
@@ -85,12 +88,14 @@ export const useTrainingStore = defineStore('training', () => {
       worldJob.value = wj
       collectJob.value = cj
       gameSettings.value = (data.game_settings as [string, unknown][]) || []
+      baseConfigDetail.value = (data.base_config_detail as ConfigGroup[]) || []
       configDetail.value = (data.config_detail as ConfigGroup[]) || []
       runDir.value = data.run as { name: string; dir: string; has_checkpoint: boolean; checkpoints: { file: string; label: string }[] } | null
       const cfg = data.config as { reset_key?: string; action_keys?: string[]; game?: string } | undefined
       resetKey.value = cfg?.reset_key || 'Space'
       actionKeys.value = cfg?.action_keys || []
       gameName.value = cfg?.game || ''
+      baseModelInfo.value = (data.base_model_info as Record<string, unknown>) || {}
       modelInfo.value = (data.model_info as Record<string, unknown>) || {}
     } catch { /* swallow */ }
   }
@@ -115,7 +120,7 @@ export const useTrainingStore = defineStore('training', () => {
     }
   }
 
-  async function startCollect(params: { experiment?: string; episodes?: number; max_steps?: number; headed?: boolean }) {
+  async function startCollect(params: { experiment?: string; episodes?: number; max_steps?: number; headed?: boolean; save_frames?: boolean }) {
     await api('/api/collect-random/start', params as Record<string, unknown>)
     await refresh()
   }
@@ -140,8 +145,8 @@ export const useTrainingStore = defineStore('training', () => {
   return {
     summary, latestStep, steps, episodes,
     job, evalJob, worldJob, collectJob, evalResult,
-    gameSettings, configDetail, runDir, resetKey, actionKeys,
-    modelInfo, gameName,
+    gameSettings, baseConfigDetail, configDetail, runDir, resetKey, actionKeys,
+    baseModelInfo, modelInfo, gameName,
     isTraining, isEvaluating, isWorldTraining, isCollecting, headerStatus,
     chartPoints, refresh, validateConfig, runMlSmoke,
     startCollect, stopCollect, startWorldTraining, stopWorldTraining,
@@ -150,6 +155,7 @@ export const useTrainingStore = defineStore('training', () => {
 
 export interface ConfigGroup {
   title: string
+  group_label?: string
   collapsed?: boolean
-  fields: [string, unknown, string, { type: string; options?: string[]; min?: number; max?: number; step?: number }][]
+  fields: [string, unknown, string, { type: string; options?: string[]; min?: number; max?: number; step?: number; label?: string }][]
 }

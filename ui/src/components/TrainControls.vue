@@ -20,14 +20,39 @@ const configStore = useConfigStore();
 
 const targetRunName = ref("");
 const additionalSteps = ref(500);
-const warmup = ref(50);
-const batch = ref("");
 const logEvery = ref(5);
-const lr = ref("");
 const headed = ref(false);
 const jepaCheckpoint = ref("");
 const selectedCheckpoint = ref("");
 const controlError = ref("");
+const modelDraftDirty = ref(false);
+const runAlgorithm = ref("dqn");
+const runObsWidth = ref("");
+const runObsHeight = ref("");
+const runGrayscale = ref("false");
+const runFrameStack = ref("");
+const runLatentDim = ref("");
+const runGamma = ref("");
+const runBatchSize = ref("");
+const runLearningStarts = ref("");
+const runTrainEvery = ref("");
+const runTargetUpdate = ref("");
+const runAgentLr = ref("");
+const runEpsilonStart = ref("");
+const runEpsilonEnd = ref("");
+const runEpsilonDecay = ref("");
+
+const algorithmOptions = [
+    { value: "dqn", label: "Pixel DQN" },
+    { value: "frozen_jepa_dqn", label: "Frozen JEPA + DQN" },
+    { value: "joint_jepa_dqn", label: "Joint JEPA + DQN" },
+    { value: "linear_q", label: "Linear Q" },
+];
+
+const colorModeOptions = [
+    { value: "false", label: "RGB" },
+    { value: "true", label: "Grayscale" },
+];
 
 const pipeRunOptions = computed(() => [
     { value: "", label: "select run or create a new by starting from here..." },
@@ -38,9 +63,20 @@ const checkpointOptions = computed(() =>
     availableCheckpoints.value.map((c) => ({ value: c.file, label: c.label })),
 );
 
+const activeModelInfo = computed<Record<string, unknown>>(() => {
+    if (runs.selectedRun && runs.runModelInfo) return runs.runModelInfo;
+    return training.baseModelInfo || training.modelInfo || {};
+});
+
+const hasPendingRun = computed(() => !!targetRunName.value && !runs.selectedRun);
+const activeRunName = computed(() => runs.selectedRun || targetRunName.value);
+const modelSettingsLocked = computed(() => !!runs.selectedRun || busy.value);
+const canCreateRun = computed(
+    () => hasPendingRun.value && !busy.value && !!targetRunName.value.trim(),
+);
+
 const currentAlgorithm = computed(() => {
-    const mi = training.modelInfo;
-    return String(mi.algorithm || "linear_q");
+    return runAlgorithm.value || String(activeModelInfo.value.algorithm || "dqn");
 });
 const isFrozenJepa = computed(
     () => currentAlgorithm.value === "frozen_jepa_dqn",
@@ -49,9 +85,23 @@ watch(isFrozenJepa, (frozen) => {
     if (!frozen && activeStep.value === 2) activeStep.value = 1;
 });
 
+watch(
+    () => configStore.currentPath,
+    () => {
+        if (runs.selectedRun) return;
+        modelDraftDirty.value = false;
+        syncModelDraftFromConfig();
+    },
+);
+
 function onNewRun(e: Event) {
     const detail = (e as CustomEvent).detail;
-    if (detail?.name) targetRunName.value = detail.name;
+    if (!detail?.name) return;
+    runs.clearSelection();
+    targetRunName.value = detail.name;
+    modelDraftDirty.value = false;
+    syncModelDraftFromConfig();
+    activeStep.value = 0;
 }
 onMounted(() => window.addEventListener("new-run", onNewRun));
 onUnmounted(() => window.removeEventListener("new-run", onNewRun));
@@ -67,7 +117,7 @@ onUnmounted(() => {
     if (clock) clearInterval(clock);
 });
 
-const busy = computed(() => training.isTraining || training.isEvaluating);
+const busy = computed(() => training.isTraining || training.isEvaluating || training.isCollecting);
 const isTraining = computed(
     () =>
         !!props.job?.running ||
@@ -83,23 +133,39 @@ const isEvaluating = computed(
 const dotClass = computed(() => {
     if (isTraining.value) return "tc-dot running";
     if (isEvaluating.value) return "tc-dot evaluating";
+    if (training.isCollecting) return "tc-dot running";
     if (props.job?.status === "error" || props.evalJob?.status === "error")
         return "tc-dot error";
+    if (training.collectJob?.status === "error") return "tc-dot error";
     if (props.job?.status === "completed") return "tc-dot stopped";
+    if (training.collectJob?.status === "completed") return "tc-dot stopped";
     return "tc-dot idle";
 });
 
 const statusText = computed(() => {
     if (isTraining.value) return "training";
     if (isEvaluating.value) return "evaluating";
+    if (training.isCollecting) return "collecting";
     if (props.job?.status === "completed") return "completed";
     if (props.job?.status === "stopped") return "stopped";
     if (props.job?.status === "error") return "error";
     if (props.evalJob?.status === "error") return "eval error";
+    if (training.collectJob?.status === "completed") return "collected";
+    if (training.collectJob?.status === "error") return "collect error";
     return "idle";
 });
 
 const statusDetail = computed(() => {
+    if (training.isCollecting && training.collectJob) {
+        const cj = training.collectJob;
+        const parts = [`ep ${cj.episodes_done}/${cj.episodes_target}`];
+        if (cj.mean_score) parts.push(`avg ${fmtNum(cj.mean_score)}`);
+        return parts.join(" · ");
+    }
+    if (training.collectJob?.status === "completed") {
+        const cj = training.collectJob;
+        return `${cj.episodes_done} eps · avg ${fmtNum(cj.mean_score)}`;
+    }
     const s = props.summary || {};
     const parts: string[] = [];
     if (s.algorithm) {
@@ -120,6 +186,10 @@ const statusDetail = computed(() => {
 });
 
 const startTs = computed(() => {
+    if (training.isCollecting && training.collectJob?.started_at) {
+        const t = training.collectJob.started_at;
+        return t > 1e12 ? t / 1000 : t;
+    }
     if (!props.job?.started_at) return null;
     return props.job.started_at > 1e12
         ? props.job.started_at / 1000
@@ -127,7 +197,8 @@ const startTs = computed(() => {
 });
 
 const elapsed = computed(() => {
-    if (!isTraining.value || startTs.value == null) return null;
+    if (startTs.value == null) return null;
+    if (!isTraining.value && !training.isCollecting) return null;
     return Math.max(0, now.value - Math.floor(startTs.value));
 });
 
@@ -136,6 +207,15 @@ const currentStep = computed(() =>
 );
 
 const eta = computed(() => {
+    if (training.isCollecting && training.collectJob) {
+        const done = training.collectJob.episodes_done;
+        const target = training.collectJob.episodes_target;
+        if (done <= 0 || elapsed.value == null) return null;
+        const rate = done / elapsed.value;
+        const remaining = target - done;
+        if (remaining <= 0) return null;
+        return remaining / rate;
+    }
     if (
         !isTraining.value ||
         startTs.value == null ||
@@ -151,6 +231,11 @@ const eta = computed(() => {
 });
 
 const progress = computed(() => {
+    if (training.isCollecting && training.collectJob) {
+        const target = training.collectJob.episodes_target;
+        if (!target) return null;
+        return Math.min(1, training.collectJob.episodes_done / target);
+    }
     if (!isTraining.value || !props.job?.requested_steps) return null;
     return Math.min(1, currentStep.value / props.job.requested_steps);
 });
@@ -188,8 +273,12 @@ function fmtRun(r: {
     return parts.join(" · ");
 }
 
-function onRunChange() {
-    runs.loadRunDetail(runs.selectedRun);
+async function onRunChange() {
+    targetRunName.value = "";
+    await runs.loadRunDetail(runs.selectedRun);
+    modelDraftDirty.value = false;
+    syncModelDraftFromConfig();
+    await training.refresh();
 }
 
 async function deleteSelectedRun() {
@@ -217,20 +306,20 @@ function openNewRun(e: MouseEvent) {
 function confirmNewRun() {
     const name = newRunName.value.trim();
     if (!name) return;
-    runs.selectedRun = "";
-    runs.checkpoints = [];
-    runs.runDir = "";
-    runs.runConfigDetail = null;
+    runs.clearSelection();
     window.dispatchEvent(new CustomEvent("new-run", { detail: { name } }));
     targetRunName.value = name;
     showNewRun.value = false;
 }
 
 const availableCheckpoints = computed(() => {
+    if (runs.selectedRun) return runs.checkpoints;
     if (runs.checkpoints.length) return runs.checkpoints;
     return training.runDir?.checkpoints ?? [];
 });
-const evalRunDir = computed(() => runs.runDir || training.runDir?.dir || "");
+const evalRunDir = computed(() =>
+    runs.selectedRun ? runs.runDir : runs.runDir || training.runDir?.dir || "",
+);
 const hasCheckpoint = computed(() => availableCheckpoints.value.length > 0);
 
 function checkpointStep(): number {
@@ -266,20 +355,96 @@ onMounted(async () => {
             dashboard_every: number;
         }>("/api/defaults");
         additionalSteps.value = defaults.default_steps || 500;
-        warmup.value = defaults.learning_starts ?? 50;
-        batch.value =
-            defaults.batch_size != null ? String(defaults.batch_size) : "";
         logEvery.value = defaults.dashboard_every || 5;
     } catch {
         /* use defaults */
     }
 });
 
+function syncModelDraftFromConfig() {
+    const mi = activeModelInfo.value;
+    runAlgorithm.value = String(mi.algorithm || "dqn");
+    runObsWidth.value = String(mi.observation_width ?? "");
+    runObsHeight.value = String(mi.observation_height ?? "");
+    runGrayscale.value = String(Boolean(mi.grayscale));
+    runFrameStack.value = String(mi.frame_stack ?? "");
+    runLatentDim.value = String(mi.latent_dim ?? "");
+    runGamma.value = String(mi.gamma ?? "");
+    runBatchSize.value = String(mi.batch_size ?? "");
+    runLearningStarts.value = String(mi.learning_starts ?? "");
+    runTrainEvery.value = String(mi.train_every ?? "");
+    runTargetUpdate.value = String(mi.target_update_interval ?? "");
+    runAgentLr.value = String(mi.agent_lr ?? "");
+    runEpsilonStart.value = String(mi.epsilon_start ?? "");
+    runEpsilonEnd.value = String(mi.epsilon_end ?? "");
+    runEpsilonDecay.value = String(mi.epsilon_decay_steps ?? "");
+}
+
+watch(
+    activeModelInfo,
+    () => {
+        if (!modelDraftDirty.value) syncModelDraftFromConfig();
+    },
+    { immediate: true, deep: true },
+);
+
+watch(
+    () => runs.selectedRun,
+    (name) => {
+        if (name) targetRunName.value = "";
+        modelDraftDirty.value = false;
+        syncModelDraftFromConfig();
+    },
+);
+
+function markModelDraftDirty() {
+    modelDraftDirty.value = true;
+}
+
+function buildRunOverrides(): { group: string; key: string; value: string }[] {
+    return [
+        { group: "agent", key: "algorithm", value: runAlgorithm.value },
+        { group: "agent", key: "gamma", value: runGamma.value },
+        { group: "agent", key: "batch_size", value: runBatchSize.value },
+        { group: "agent", key: "learning_starts", value: runLearningStarts.value },
+        { group: "agent", key: "train_every", value: runTrainEvery.value },
+        { group: "agent", key: "target_update_interval", value: runTargetUpdate.value },
+        { group: "agent", key: "optimizer.lr", value: runAgentLr.value },
+        { group: "observation", key: "width", value: runObsWidth.value },
+        { group: "observation", key: "height", value: runObsHeight.value },
+        { group: "observation", key: "grayscale", value: runGrayscale.value },
+        { group: "observation", key: "frame_stack", value: runFrameStack.value },
+        { group: "world_model", key: "latent_dim", value: runLatentDim.value },
+        { group: "exploration", key: "epsilon_start", value: runEpsilonStart.value },
+        { group: "exploration", key: "epsilon_end", value: runEpsilonEnd.value },
+        { group: "exploration", key: "epsilon_decay_steps", value: runEpsilonDecay.value },
+    ].filter((item) => item.value !== "");
+}
+
+async function createTrainingRun() {
+    controlError.value = "";
+    const name = targetRunName.value.trim();
+    if (!name) {
+        controlError.value = "enter a run name first";
+        return;
+    }
+    try {
+        await runs.createRun(name, buildRunOverrides());
+        targetRunName.value = "";
+        modelDraftDirty.value = false;
+        await training.refresh();
+        syncModelDraftFromConfig();
+    } catch (e) {
+        controlError.value = e instanceof Error ? e.message : String(e);
+        console.error(e);
+    }
+}
+
 async function startTraining() {
     controlError.value = "";
-    const experiment = targetRunName.value || runs.selectedRun || "";
+    const experiment = runs.selectedRun || "";
     if (!experiment) {
-        controlError.value = "select or create a run first";
+        controlError.value = "create or select a run first";
         return;
     }
     const ckptStep = checkpointStep();
@@ -287,12 +452,9 @@ async function startTraining() {
     const payload: Record<string, unknown> = {
         experiment,
         steps: totalSteps,
-        learning_starts: Number(warmup.value),
-        batch_size: batch.value || null,
         dashboard_every: Number(logEvery.value) || 5,
         headed: headed.value,
     };
-    if (lr.value) payload.lr = Number(lr.value);
     if (isFrozenJepa.value && jepaCheckpoint.value)
         payload.jepa_checkpoint = jepaCheckpoint.value;
     try {
@@ -342,15 +504,29 @@ async function watchAiPlay() {
 const collectEpisodes = ref(5);
 const collectMaxSteps = ref(200);
 const collectError = ref("");
+const saveFrames = ref(false);
 
-// Auto-generate collection name: <game>-rand-act-<next_free_int>
-const autoCollectName = computed(() => {
-    const game = training.gameName || "game";
-    const existingNames = new Set(runs.collectedDatasets.map((d) => d.name));
-    let n = 1;
-    while (existingNames.has(`${game}-rand-act-${n}`)) n++;
-    return `${game}-rand-act-${n}`;
+
+const selectedDatasetInfo = computed(() => {
+    if (!selectedDataset.value) return null;
+    return runs.collectedDatasets.find((d) => d.name === selectedDataset.value) ?? null;
 });
+
+function fmtBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes}b`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}kb`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}mb`;
+}
+
+async function deleteDataset(name: string) {
+    if (!confirm(`Delete dataset "${name}"?`)) return;
+    try {
+        await runs.deleteDataset(name);
+        if (selectedDataset.value === name) selectedDataset.value = "";
+    } catch (e) {
+        collectError.value = e instanceof Error ? e.message : String(e);
+    }
+}
 
 const datasetOptions = computed(() => {
     const opts = [{ value: "", label: "none" }];
@@ -362,6 +538,16 @@ const datasetOptions = computed(() => {
     }
     return opts;
 });
+
+// Auto-generate collection name: <game>-rand-act-<next_free_int>
+const autoCollectName = computed(() => {
+    const game = training.gameName || "game";
+    const existingNames = new Set(runs.collectedDatasets.map((d) => d.name));
+    let n = 1;
+    while (existingNames.has(`${game}-rand-act-${n}`)) n++;
+    return `${game}-rand-act-${n}`;
+});
+
 const selectedDataset = ref("");
 
 async function startCollect() {
@@ -373,6 +559,7 @@ async function startCollect() {
             episodes: collectEpisodes.value,
             max_steps: collectMaxSteps.value,
             headed: headed.value,
+            save_frames: saveFrames.value,
         });
         runs.loadCollectedDatasets();
     } catch (e) {
@@ -397,11 +584,13 @@ const worldError = ref("");
 
 async function startWorldTraining() {
     worldError.value = "";
+    if (!runs.selectedRun) {
+        worldError.value = "create or select a run first";
+        return;
+    }
     try {
         await training.startWorldTraining({
-            experiment:
-                (targetRunName.value || runs.selectedRun || undefined) &&
-                `${targetRunName.value || runs.selectedRun}_world`,
+            experiment: `${runs.selectedRun}_world`,
             steps: worldSteps.value,
             collect_steps: worldCollectSteps.value
                 ? Number(worldCollectSteps.value)
@@ -428,6 +617,50 @@ async function stopWorldTraining() {
 const editingField = ref<string | null>(null);
 const editValue = ref("");
 const editPopoverStyle = ref<Record<string, string>>({});
+const editLabels: Record<string, string> = {
+    collectEpisodes: "episodes",
+    collectMaxSteps: "max steps",
+    worldSteps: "world steps",
+    worldBatch: "world batch",
+    worldLr: "world lr",
+    worldCollectSteps: "pre-collect",
+    worldDashEvery: "world log every",
+    additionalSteps: "training steps",
+    logEvery: "log every",
+    jepaCheckpoint: "JEPA checkpoint",
+    runObsWidth: "observation width",
+    runObsHeight: "observation height",
+    runFrameStack: "frame stack",
+    runLatentDim: "latent dimension",
+    runGamma: "discount gamma",
+    runBatchSize: "run batch",
+    runLearningStarts: "learning starts",
+    runTrainEvery: "train every",
+    runTargetUpdate: "target sync",
+    runAgentLr: "policy learning rate",
+    runEpsilonStart: "epsilon start",
+    runEpsilonEnd: "epsilon end",
+    runEpsilonDecay: "epsilon decay steps",
+};
+const editingFieldLabel = computed(() =>
+    editingField.value ? editLabels[editingField.value] || editingField.value : "",
+);
+
+const modelFieldKeys = new Set([
+    "runObsWidth",
+    "runObsHeight",
+    "runFrameStack",
+    "runLatentDim",
+    "runGamma",
+    "runBatchSize",
+    "runLearningStarts",
+    "runTrainEvery",
+    "runTargetUpdate",
+    "runAgentLr",
+    "runEpsilonStart",
+    "runEpsilonEnd",
+    "runEpsilonDecay",
+]);
 
 function displayVal(key: string): string {
     switch (key) {
@@ -445,24 +678,50 @@ function displayVal(key: string): string {
             return worldCollectSteps.value;
         case "worldDashEvery":
             return String(worldDashEvery.value);
-        case "warmup":
-            return String(warmup.value);
         case "additionalSteps":
             return String(additionalSteps.value);
-        case "batch":
-            return batch.value;
-        case "lr":
-            return lr.value;
         case "logEvery":
             return String(logEvery.value);
         case "jepaCheckpoint":
             return jepaCheckpoint.value;
+        case "runObsWidth":
+            return runObsWidth.value;
+        case "runObsHeight":
+            return runObsHeight.value;
+        case "runFrameStack":
+            return runFrameStack.value;
+        case "runLatentDim":
+            return runLatentDim.value;
+        case "runGamma":
+            return runGamma.value;
+        case "runBatchSize":
+            return runBatchSize.value;
+        case "runLearningStarts":
+            return runLearningStarts.value;
+        case "runTrainEvery":
+            return runTrainEvery.value;
+        case "runTargetUpdate":
+            return runTargetUpdate.value;
+        case "runAgentLr":
+            return runAgentLr.value;
+        case "runEpsilonStart":
+            return runEpsilonStart.value;
+        case "runEpsilonEnd":
+            return runEpsilonEnd.value;
+        case "runEpsilonDecay":
+            return runEpsilonDecay.value;
         default:
             return "";
     }
 }
 
+function fieldCls(key: string): Record<string, boolean> {
+    const locked = modelFieldKeys.has(key) && modelSettingsLocked.value;
+    return { "clickable-field": !locked, "cf-locked": locked };
+}
+
 function openFieldEdit(key: string, event: MouseEvent) {
+    if (modelFieldKeys.has(key) && modelSettingsLocked.value) return;
     editingField.value = key;
     editValue.value = displayVal(key);
     editPopoverStyle.value = anchorBelow(
@@ -474,6 +733,10 @@ function openFieldEdit(key: string, event: MouseEvent) {
 function saveFieldEdit() {
     if (!editingField.value) return;
     const key = editingField.value;
+    if (modelFieldKeys.has(key) && modelSettingsLocked.value) {
+        editingField.value = null;
+        return;
+    }
     const val = editValue.value;
     const n = Number(val);
     switch (key) {
@@ -498,17 +761,8 @@ function saveFieldEdit() {
         case "worldDashEvery":
             worldDashEvery.value = n;
             break;
-        case "warmup":
-            warmup.value = n;
-            break;
         case "additionalSteps":
             additionalSteps.value = n;
-            break;
-        case "batch":
-            batch.value = val;
-            break;
-        case "lr":
-            lr.value = val;
             break;
         case "logEvery":
             logEvery.value = n;
@@ -516,22 +770,64 @@ function saveFieldEdit() {
         case "jepaCheckpoint":
             jepaCheckpoint.value = val;
             break;
+        case "runObsWidth":
+            runObsWidth.value = val;
+            markModelDraftDirty();
+            break;
+        case "runObsHeight":
+            runObsHeight.value = val;
+            markModelDraftDirty();
+            break;
+        case "runFrameStack":
+            runFrameStack.value = val;
+            markModelDraftDirty();
+            break;
+        case "runLatentDim":
+            runLatentDim.value = val;
+            markModelDraftDirty();
+            break;
+        case "runGamma":
+            runGamma.value = val;
+            markModelDraftDirty();
+            break;
+        case "runBatchSize":
+            runBatchSize.value = val;
+            markModelDraftDirty();
+            break;
+        case "runLearningStarts":
+            runLearningStarts.value = val;
+            markModelDraftDirty();
+            break;
+        case "runTrainEvery":
+            runTrainEvery.value = val;
+            markModelDraftDirty();
+            break;
+        case "runTargetUpdate":
+            runTargetUpdate.value = val;
+            markModelDraftDirty();
+            break;
+        case "runAgentLr":
+            runAgentLr.value = val;
+            markModelDraftDirty();
+            break;
+        case "runEpsilonStart":
+            runEpsilonStart.value = val;
+            markModelDraftDirty();
+            break;
+        case "runEpsilonEnd":
+            runEpsilonEnd.value = val;
+            markModelDraftDirty();
+            break;
+        case "runEpsilonDecay":
+            runEpsilonDecay.value = val;
+            markModelDraftDirty();
+            break;
     }
     editingField.value = null;
 }
 
 function closeFieldEdit() {
     editingField.value = null;
-}
-
-// Model config edit via config store overrides
-async function saveConfigEdit(group: string, key: string, value: string) {
-    try {
-        await configStore.applyOverrides([{ group, key, value }]);
-        await training.refresh();
-    } catch (e) {
-        console.error("Config update failed:", e);
-    }
 }
 
 // Pipeline
@@ -546,8 +842,11 @@ type StepStatus =
     | "skipped";
 
 const stepStatus = computed((): StepStatus[] => {
-    // Step 0: Model — always "ready" (or "done" once validated)
-    const s0: StepStatus = "ready";
+    const s0: StepStatus = runs.selectedRun
+        ? "done"
+        : targetRunName.value
+          ? "ready"
+          : "pending";
     const s1: StepStatus = training.isCollecting
         ? "running"
         : training.collectJob?.status === "completed"
@@ -570,7 +869,7 @@ const stepStatus = computed((): StepStatus[] => {
           ? "done"
           : props.job?.status === "error"
             ? "error"
-            : targetRunName.value || runs.selectedRun
+            : runs.selectedRun
               ? "ready"
               : "pending";
     return [s0, s1, s2, s3];
@@ -604,7 +903,8 @@ function nodeIcon(status: StepStatus, idx: number): string {
     if (status === "error") return "✗";
     if (status === "skipped") return "–";
     if (status === "running") return "●";
-    return String(idx + 1);
+    const vi = visibleSteps.value.indexOf(idx);
+    return String(vi >= 0 ? vi + 1 : idx + 1);
 }
 
 // Passive config validation
@@ -645,15 +945,15 @@ function anchorBelow(el: HTMLElement, minWidth = 180): Record<string, string> {
 }
 
 // Model info helpers
-const mi = computed(() => training.modelInfo);
+const mi = activeModelInfo;
 const obsLabel = computed(() => {
-    const w = mi.value.observation_width ?? "?";
-    const h = mi.value.observation_height ?? "?";
+    const w = runObsWidth.value || mi.value.observation_width || "?";
+    const h = runObsHeight.value || mi.value.observation_height || "?";
     return `${w}×${h}`;
 });
 const colorLabel = computed(() => {
-    const gray = mi.value.grayscale;
-    const fs = mi.value.frame_stack ?? "?";
+    const gray = runGrayscale.value === "true";
+    const fs = runFrameStack.value || mi.value.frame_stack || "?";
     return gray ? `grayscale · ${fs} frames` : `color · ${fs} frames`;
 });
 const encoderLabel = computed(() => {
@@ -729,43 +1029,6 @@ const algoTip = computed(() => {
     return all;
 });
 
-// Editable model field popover
-const editingConfigField = ref<string | null>(null);
-const configEditValue = ref("");
-const configEditMeta = ref<{ group: string; key: string }>({
-    group: "",
-    key: "",
-});
-const configPopoverStyle = ref<Record<string, string>>({});
-
-function openConfigEdit(
-    group: string,
-    key: string,
-    currentVal: unknown,
-    event: MouseEvent,
-) {
-    editingConfigField.value = key;
-    configEditMeta.value = { group, key };
-    configEditValue.value = String(currentVal ?? "");
-    configPopoverStyle.value = anchorBelow(
-        event.currentTarget as HTMLElement,
-        200,
-    );
-}
-
-function saveConfigFieldEdit() {
-    if (!editingConfigField.value) return;
-    saveConfigEdit(
-        configEditMeta.value.group,
-        configEditMeta.value.key,
-        configEditValue.value,
-    );
-    editingConfigField.value = null;
-}
-
-function closeConfigFieldEdit() {
-    editingConfigField.value = null;
-}
 </script>
 
 <template>
@@ -788,9 +1051,9 @@ function closeConfigFieldEdit() {
                 full-width
             />
             <button
-                v-if="!runs.selectedRun"
                 @click="openNewRun"
                 class="btn-tiny"
+                :disabled="busy"
             >
                 + new
             </button>
@@ -808,17 +1071,20 @@ function closeConfigFieldEdit() {
             <span :class="dotClass"></span>
             <span class="pipe-st-label">{{ statusText }}</span>
             <span class="pipe-st-detail">{{ statusDetail }}</span>
-            <template v-if="isTraining && elapsed != null">
+            <template v-if="elapsed != null">
                 <span class="pipe-st-time">{{ fmtDuration(elapsed) }}</span>
                 <span v-if="eta != null" class="pipe-st-eta"
                     >~{{ fmtDuration(eta) }}</span
                 >
             </template>
-            <button v-if="busy" @click="stopTraining" class="btn-danger-tiny">
+            <button v-if="isTraining || isEvaluating" @click="stopTraining" class="btn-danger-tiny">
+                stop
+            </button>
+            <button v-if="training.isCollecting" @click="stopCollect" class="btn-danger-tiny">
                 stop
             </button>
         </div>
-        <div v-if="isTraining && progress != null" class="pipe-prog">
+        <div v-if="progress != null" class="pipe-prog">
             <div
                 class="pipe-prog-fill"
                 :style="{ width: progress * 100 + '%' }"
@@ -861,8 +1127,19 @@ function closeConfigFieldEdit() {
         <!-- Step 0: Model Setup -->
         <div v-show="activeStep === 0" class="pipe-panel pipe-panel-model">
             <div class="pipe-panel-desc">
-                Review and configure the model architecture and observation
-                settings before collecting data or training.
+                Configure model settings while this run is still a draft. Create
+                the run to write the config snapshot; after that, model settings
+                are locked and training can only use the snapshot.
+            </div>
+
+            <div class="pipe-run-card">
+                <span class="sk">run</span>
+                <span class="sv">
+                    <span class="mi-val">{{ activeRunName || "new run needed" }}</span>
+                    <span class="run-lock-state">
+                        {{ runs.selectedRun ? "locked snapshot" : hasPendingRun ? "draft" : "not created" }}
+                    </span>
+                </span>
             </div>
 
             <!-- Config validation error only -->
@@ -874,19 +1151,21 @@ function closeConfigFieldEdit() {
             </div>
 
             <!-- Model info as settings table -->
-            <div class="settings-table mi-table">
+            <div class="settings-table mi-table" :class="{ 'mi-table-locked': modelSettingsLocked }">
                 <span class="sk">algorithm</span>
                 <div class="sv mi-sv">
+                    <VDropdown
+                        v-model="runAlgorithm"
+                        :options="algorithmOptions"
+                        compact
+                        :disabled="modelSettingsLocked"
+                        @change="markModelDraftDirty"
+                    />
                     <span
-                        class="mi-badge"
-                        :class="'mi-badge-' + currentAlgorithm"
-                        >{{
-                            algoDisplay[currentAlgorithm] || currentAlgorithm
-                        }}</span
-                    >
-                    <span class="mi-desc" :data-tip="algoTip">{{
-                        algoShortDesc
-                    }}</span>
+                        class="mi-desc"
+                        :data-tip="algoTip"
+                        :data-short="algoShortDesc"
+                    ></span>
                 </div>
 
                 <span class="sk">observation</span>
@@ -897,82 +1176,56 @@ function closeConfigFieldEdit() {
                     <span
                         class="mi-desc"
                         data-tip="Input image resolution and format fed to the encoder. Smaller sizes train faster; grayscale reduces dimensionality; frame stacking provides temporal context so the agent can perceive motion."
-                        >Input resolution and format</span
-                    >
+                        data-short="Input resolution and format"
+                    ></span>
                 </div>
 
                 <span class="sk">obs width</span>
                 <div class="sv mi-sv">
                     <span
-                        class="clickable-field"
-                        @click="
-                            openConfigEdit(
-                                'observation',
-                                'width',
-                                mi.observation_width,
-                                $event,
-                            )
-                        "
-                        >{{ mi.observation_width ?? "—" }}</span
+                        :class="fieldCls('runObsWidth')"
+                        @click="openFieldEdit('runObsWidth', $event)"
+                        >{{ runObsWidth || "—" }}</span
                     >
                 </div>
 
                 <span class="sk">obs height</span>
                 <div class="sv mi-sv">
                     <span
-                        class="clickable-field"
-                        @click="
-                            openConfigEdit(
-                                'observation',
-                                'height',
-                                mi.observation_height,
-                                $event,
-                            )
-                        "
-                        >{{ mi.observation_height ?? "—" }}</span
+                        :class="fieldCls('runObsHeight')"
+                        @click="openFieldEdit('runObsHeight', $event)"
+                        >{{ runObsHeight || "—" }}</span
                     >
                 </div>
 
-                <span class="sk">grayscale</span>
+                <span class="sk">color</span>
                 <div class="sv mi-sv">
-                    <span
-                        class="clickable-field"
-                        @click="
-                            openConfigEdit(
-                                'observation',
-                                'grayscale',
-                                mi.grayscale,
-                                $event,
-                            )
-                        "
-                        >{{ mi.grayscale ? "yes" : "no" }}</span
-                    >
+                    <VDropdown
+                        v-model="runGrayscale"
+                        :options="colorModeOptions"
+                        compact
+                        :disabled="modelSettingsLocked"
+                        @change="markModelDraftDirty"
+                    />
                     <span
                         class="mi-desc"
                         data-tip="Converts RGB input to single-channel grayscale, reducing the observation tensor from 3 channels to 1. Lower memory and faster training, but loses color information some games rely on."
-                        >1ch vs 3ch input</span
-                    >
+                        data-short="1ch vs 3ch input"
+                    ></span>
                 </div>
 
                 <span class="sk">frame stack</span>
                 <div class="sv mi-sv">
                     <span
-                        class="clickable-field"
-                        @click="
-                            openConfigEdit(
-                                'observation',
-                                'frame_stack',
-                                mi.frame_stack,
-                                $event,
-                            )
-                        "
-                        >{{ mi.frame_stack ?? "—" }}</span
+                        :class="fieldCls('runFrameStack')"
+                        @click="openFieldEdit('runFrameStack', $event)"
+                        >{{ runFrameStack || "—" }}</span
                     >
                     <span
                         class="mi-desc"
                         data-tip="Number of consecutive frames stacked together as a single observation. Enables the agent to infer velocity and direction of moving objects from pixel differences between frames."
-                        >Frames per observation</span
-                    >
+                        data-short="Frames per observation"
+                    ></span>
                 </div>
 
                 <span class="sk">actions</span>
@@ -981,10 +1234,10 @@ function closeConfigFieldEdit() {
                     <span
                         class="mi-desc"
                         data-tip="Discrete keyboard actions the agent can take each step. Defined by the game's action space config (e.g. noop, left, right, fire for Breakout)."
-                        >{{
-                            ((mi.action_keys as string[]) || []).join(", ")
-                        }}</span
-                    >
+                        :data-short="
+                            ((mi.action_keys as string[]) || []).join(', ')
+                        "
+                    ></span>
                 </div>
 
                 <span class="sk">encoder</span>
@@ -993,29 +1246,22 @@ function closeConfigFieldEdit() {
                     <span
                         class="mi-desc"
                         data-tip="Convolutional stack that converts raw pixel frames into a latent representation. Channel progression defines the depth and capacity of the feature extractor."
-                        >Pixel-to-latent feature extractor</span
-                    >
+                        data-short="Pixel-to-latent feature extractor"
+                    ></span>
                 </div>
 
                 <span class="sk">latent dim</span>
                 <div class="sv mi-sv">
                     <span
-                        class="clickable-field"
-                        @click="
-                            openConfigEdit(
-                                'world_model',
-                                'latent_dim',
-                                mi.latent_dim,
-                                $event,
-                            )
-                        "
-                        >{{ mi.latent_dim ?? "—" }}</span
+                        :class="fieldCls('runLatentDim')"
+                        @click="openFieldEdit('runLatentDim', $event)"
+                        >{{ runLatentDim || "—" }}</span
                     >
                     <span
                         class="mi-desc"
                         data-tip="Size of the latent embedding vector produced by the encoder. Higher dimensions capture more detail but increase memory and compute. Typical range: 128–512."
-                        >Latent space size</span
-                    >
+                        data-short="Latent space size"
+                    ></span>
                 </div>
 
                 <span class="sk">predictor</span>
@@ -1024,8 +1270,8 @@ function closeConfigFieldEdit() {
                     <span
                         class="mi-desc"
                         data-tip="Transformer module that predicts future latent states given the current latent and a sequence of actions. Depth and heads control its capacity. Trained during JEPA world model pretraining."
-                        >Action-conditioned future predictor</span
-                    >
+                        data-short="Action-conditioned future predictor"
+                    ></span>
                 </div>
 
                 <span class="sk">q-network</span>
@@ -1034,15 +1280,142 @@ function closeConfigFieldEdit() {
                     <span
                         class="mi-desc"
                         data-tip="Fully-connected network that estimates action values (Q-values) from the latent representation. Dueling architecture separates state-value and advantage streams for more stable learning."
-                        >Action value estimator</span
+                        data-short="Action value estimator"
+                    ></span>
+                </div>
+
+                <span class="sk">gamma</span>
+                <div class="sv mi-sv">
+                    <span
+                        :class="fieldCls('runGamma')"
+                        @click="openFieldEdit('runGamma', $event)"
+                        >{{ runGamma || "—" }}</span
                     >
+                    <span
+                        class="mi-desc"
+                        data-tip="Reward discount factor. Higher values make the policy care more about delayed rewards."
+                        data-short="future reward weighting"
+                    ></span>
+                </div>
+
+                <span class="sk">batch</span>
+                <div class="sv mi-sv">
+                    <span
+                        :class="fieldCls('runBatchSize')"
+                        @click="openFieldEdit('runBatchSize', $event)"
+                        >{{ runBatchSize || "—" }}</span
+                    >
+                    <span
+                        class="mi-desc"
+                        data-tip="Replay minibatch size used for policy updates. Saved into the run snapshot and locked once the run is created."
+                        data-short="policy update minibatch"
+                    ></span>
+                </div>
+
+                <span class="sk">learn starts</span>
+                <div class="sv mi-sv">
+                    <span
+                        :class="fieldCls('runLearningStarts')"
+                        @click="openFieldEdit('runLearningStarts', $event)"
+                        >{{ runLearningStarts || "—" }}</span
+                    >
+                    <span
+                        class="mi-desc"
+                        data-tip="Environment steps collected before gradient updates begin. Saved into the run snapshot and locked once the run is created."
+                        data-short="replay warmup before learning"
+                    ></span>
+                </div>
+
+                <span class="sk">train every</span>
+                <div class="sv mi-sv">
+                    <span
+                        :class="fieldCls('runTrainEvery')"
+                        @click="openFieldEdit('runTrainEvery', $event)"
+                        >{{ runTrainEvery || "—" }}</span
+                    >
+                    <span
+                        class="mi-desc"
+                        data-tip="Run policy gradient updates every N environment steps."
+                        data-short="policy update cadence"
+                    ></span>
+                </div>
+
+                <span class="sk">target sync</span>
+                <div class="sv mi-sv">
+                    <span
+                        :class="fieldCls('runTargetUpdate')"
+                        @click="openFieldEdit('runTargetUpdate', $event)"
+                        >{{ runTargetUpdate || "—" }}</span
+                    >
+                    <span
+                        class="mi-desc"
+                        data-tip="Step interval for copying the online Q-network into the target Q-network."
+                        data-short="target network interval"
+                    ></span>
+                </div>
+
+                <span class="sk">policy lr</span>
+                <div class="sv mi-sv">
+                    <span
+                        :class="fieldCls('runAgentLr')"
+                        @click="openFieldEdit('runAgentLr', $event)"
+                        >{{ runAgentLr || "—" }}</span
+                    >
+                    <span
+                        class="mi-desc"
+                        data-tip="Learning rate for the policy optimizer. This belongs to the run snapshot and cannot be changed after the run is created."
+                        data-short="policy optimizer step size"
+                    ></span>
+                </div>
+
+                <span class="sk">epsilon</span>
+                <div class="sv mi-sv">
+                    <span
+                        :class="fieldCls('runEpsilonStart')"
+                        @click="openFieldEdit('runEpsilonStart', $event)"
+                        >{{ runEpsilonStart || "—" }}</span
+                    >
+                    <span>→</span>
+                    <span
+                        :class="fieldCls('runEpsilonEnd')"
+                        @click="openFieldEdit('runEpsilonEnd', $event)"
+                        >{{ runEpsilonEnd || "—" }}</span
+                    >
+                    <span
+                        class="mi-desc"
+                        data-tip="Epsilon-greedy exploration schedule. The agent starts random and decays toward greedy action selection."
+                        data-short="exploration start and floor"
+                    ></span>
+                </div>
+
+                <span class="sk">eps decay</span>
+                <div class="sv mi-sv">
+                    <span
+                        :class="fieldCls('runEpsilonDecay')"
+                        @click="openFieldEdit('runEpsilonDecay', $event)"
+                        >{{ runEpsilonDecay || "—" }}</span
+                    >
+                    <span
+                        class="mi-desc"
+                        data-tip="Number of environment steps over which epsilon decays from start to end."
+                        data-short="exploration decay horizon"
+                    ></span>
                 </div>
             </div>
 
             <div class="pipe-nav">
                 <button
+                    v-if="hasPendingRun"
+                    @click="createTrainingRun"
+                    class="btn-accent-tiny"
+                    :disabled="!canCreateRun"
+                >
+                    create run
+                </button>
+                <button
                     @click="activeStep = nextStep(0)"
                     class="btn-tiny pipe-next"
+                    :disabled="!runs.selectedRun"
                 >
                     next →
                 </button>
@@ -1063,21 +1436,15 @@ function closeConfigFieldEdit() {
                         <span class="sk" title="Random episodes to run"
                             >episodes</span
                         >
-                        <div
-                            class="sv clickable-field"
-                            @click="openFieldEdit('collectEpisodes', $event)"
-                        >
-                            {{ collectEpisodes }}
+                        <div class="sv">
+                            <span class="clickable-field" @click="openFieldEdit('collectEpisodes', $event)">{{ collectEpisodes }}</span>
                         </div>
 
                         <span class="sk" title="Max steps per episode"
                             >max steps</span
                         >
-                        <div
-                            class="sv clickable-field"
-                            @click="openFieldEdit('collectMaxSteps', $event)"
-                        >
-                            {{ collectMaxSteps }}
+                        <div class="sv">
+                            <span class="clickable-field" @click="openFieldEdit('collectMaxSteps', $event)">{{ collectMaxSteps }}</span>
                         </div>
 
                         <span class="sk" title="Auto-generated experiment name"
@@ -1089,75 +1456,69 @@ function closeConfigFieldEdit() {
                                 >{{ autoCollectName }}</span
                             >
                         </div>
+                        <span class="sk">screenshots</span>
+                        <label class="pipe-data-toggle">
+                            <input type="checkbox" v-model="saveFrames" />
+                            <span class="toggle-track">
+                                <span class="toggle-thumb"></span>
+                            </span>
+                            <span class="toggle-label">{{ saveFrames ? 'on' : 'off' }}</span>
+                        </label>
                     </div>
                 </div>
 
                 <div class="pipe-data-datasets">
-                    <div class="pipe-ds-header">Collected Datasets</div>
-                    <VDropdown
-                        v-model="selectedDataset"
-                        :options="datasetOptions"
-                        title="Previously collected random-action datasets"
-                        full-width
-                        compact
-                    />
+                    <div class="pipe-ds-header">
+                        Datasets
+                        <span class="pipe-ds-count">{{ runs.collectedDatasets.length }}</span>
+                    </div>
                     <div
                         v-if="runs.collectedDatasets.length === 0"
                         class="pipe-ds-empty"
                     >
                         No datasets yet. Collect data to create one.
                     </div>
-                    <div v-else class="pipe-ds-list">
-                        <div
-                            v-for="d in runs.collectedDatasets.slice(0, 5)"
-                            :key="d.name"
-                            class="pipe-ds-item"
-                            :class="{
-                                'pipe-ds-selected': selectedDataset === d.name,
-                            }"
-                            @click="selectedDataset = d.name"
-                        >
-                            <span class="pipe-ds-name">{{ d.name }}</span>
-                            <span class="pipe-ds-meta"
-                                >{{ d.episodes }} eps · avg
-                                {{ fmtNum(d.mean_score) }}</span
-                            >
-                        </div>
-                    </div>
+                    <template v-else>
+                        <VDropdown
+                            v-model="selectedDataset"
+                            :options="datasetOptions"
+                            title="Select a collected dataset"
+                            full-width
+                            compact
+                        />
+                        <button
+                            v-if="selectedDataset"
+                            class="btn-danger-tiny"
+                            style="margin-top: 2px; align-self: flex-end"
+                            @click="deleteDataset(selectedDataset)"
+                        >delete dataset</button>
+                    </template>
                 </div>
             </div>
 
-            <template v-if="training.isCollecting && training.collectJob">
-                <div class="pipe-data-progress">
-                    <span class="pipe-dp-label">Collecting</span>
-                    <div class="pipe-dp-track">
-                        <div
-                            class="pipe-dp-fill"
-                            :style="{
-                                width:
-                                    Math.min(
-                                        100,
-                                        (training.collectJob.episodes_done /
-                                            training.collectJob
-                                                .episodes_target) *
-                                            100,
-                                    ) + '%',
-                            }"
-                        ></div>
+            <!-- Dataset detail (always rendered, fixed height) -->
+            <div class="pipe-ds-detail" :class="{ 'pipe-ds-detail-active': !!selectedDatasetInfo }">
+                <template v-if="selectedDatasetInfo">
+                    <div class="pipe-ds-detail-row">
+                        <span class="pipe-ds-detail-name">{{ selectedDatasetInfo.name }}</span>
                     </div>
-                    <span class="pipe-dp-count"
-                        >{{ training.collectJob.episodes_done }}/{{
-                            training.collectJob.episodes_target
-                        }}</span
-                    >
-                    <span
-                        v-if="training.collectJob.mean_score"
-                        class="pipe-dp-score"
-                        >avg {{ fmtNum(training.collectJob.mean_score) }}</span
-                    >
-                </div>
-            </template>
-            <div v-if="collectError" class="tc-error" style="font-size: 9px">
+                    <div class="pipe-ds-detail-stats">
+                        <span>{{ selectedDatasetInfo.episodes }} eps</span>
+                        <span>{{ selectedDatasetInfo.total_steps }} steps</span>
+                        <span>~{{ fmtNum(selectedDatasetInfo.mean_length) }} len</span>
+                        <span>{{ fmtBytes(selectedDatasetInfo.size_bytes) }}</span>
+                    </div>
+                    <div class="pipe-ds-detail-scores">
+                        <span>avg {{ fmtNum(selectedDatasetInfo.mean_score) }}</span>
+                        <span>med {{ fmtNum(selectedDatasetInfo.median_score) }}</span>
+                        <span>best {{ fmtNum(selectedDatasetInfo.max_score) }}</span>
+                        <span>min {{ fmtNum(selectedDatasetInfo.min_score) }}</span>
+                    </div>
+                </template>
+                <div v-else class="pipe-ds-detail-empty">select a dataset to view details</div>
+            </div>
+
+            <div v-if="collectError" class="tc-error pipe-err">
                 {{ collectError }}
             </div>
 
@@ -1172,14 +1533,6 @@ function closeConfigFieldEdit() {
                     :disabled="busy"
                 >
                     collect
-                </button>
-                <button
-                    v-if="training.isCollecting"
-                    @click="stopCollect"
-                    class="btn-tiny"
-                    style="color: var(--red)"
-                >
-                    stop
                 </button>
                 <button
                     @click="activeStep = nextStep(1)"
@@ -1211,50 +1564,39 @@ function closeConfigFieldEdit() {
 
                 <div class="settings-table">
                     <span class="sk" title="Gradient steps">steps</span>
-                    <div
-                        class="sv clickable-field"
-                        @click="openFieldEdit('worldSteps', $event)"
-                    >
-                        {{ worldSteps }}
+                    <div class="sv">
+                        <span class="clickable-field" @click="openFieldEdit('worldSteps', $event)">{{ worldSteps }}</span>
                     </div>
 
                     <span class="sk" title="Batch size">batch</span>
-                    <div
-                        class="sv clickable-field"
-                        @click="openFieldEdit('worldBatch', $event)"
-                    >
-                        <span v-if="worldBatch">{{ worldBatch }}</span>
-                        <span v-else class="cf-muted">auto</span>
+                    <div class="sv">
+                        <span class="clickable-field" @click="openFieldEdit('worldBatch', $event)">
+                            <span v-if="worldBatch">{{ worldBatch }}</span>
+                            <span v-else class="cf-muted">auto</span>
+                        </span>
                     </div>
 
                     <span class="sk" title="Learning rate">lr</span>
-                    <div
-                        class="sv clickable-field"
-                        @click="openFieldEdit('worldLr', $event)"
-                    >
-                        <span v-if="worldLr">{{ worldLr }}</span>
-                        <span v-else class="cf-muted">auto</span>
+                    <div class="sv">
+                        <span class="clickable-field" @click="openFieldEdit('worldLr', $event)">
+                            <span v-if="worldLr">{{ worldLr }}</span>
+                            <span v-else class="cf-muted">auto</span>
+                        </span>
                     </div>
 
                     <span class="sk" title="Pre-collect browser steps"
                         >pre-collect</span
                     >
-                    <div
-                        class="sv clickable-field"
-                        @click="openFieldEdit('worldCollectSteps', $event)"
-                    >
-                        <span v-if="worldCollectSteps">{{
-                            worldCollectSteps
-                        }}</span>
-                        <span v-else class="cf-muted">auto</span>
+                    <div class="sv">
+                        <span class="clickable-field" @click="openFieldEdit('worldCollectSteps', $event)">
+                            <span v-if="worldCollectSteps">{{ worldCollectSteps }}</span>
+                            <span v-else class="cf-muted">auto</span>
+                        </span>
                     </div>
 
                     <span class="sk" title="Log interval">log every</span>
-                    <div
-                        class="sv clickable-field"
-                        @click="openFieldEdit('worldDashEvery', $event)"
-                    >
-                        {{ worldDashEvery }}
+                    <div class="sv">
+                        <span class="clickable-field" @click="openFieldEdit('worldDashEvery', $event)">{{ worldDashEvery }}</span>
                     </div>
 
                     <template
@@ -1284,7 +1626,7 @@ function closeConfigFieldEdit() {
                         v-if="!training.isWorldTraining"
                         @click="startWorldTraining"
                         class="btn-tiny btn-accent-tiny"
-                        :disabled="busy"
+                        :disabled="busy || !runs.selectedRun"
                     >
                         train world
                     </button>
@@ -1309,9 +1651,8 @@ function closeConfigFieldEdit() {
         <!-- Step 3: Train RL Agent -->
         <div v-show="activeStep === 3" class="pipe-panel pipe-panel-train">
             <div class="pipe-panel-desc">
-                Train the RL agent. Starts by filling the replay buffer with
-                random actions (<strong>warmup</strong>), then learns from
-                experience.
+                Train or resume the selected run. Model, optimizer, replay, and
+                exploration settings come from the locked run snapshot.
             </div>
 
             <div class="settings-table">
@@ -1319,12 +1660,11 @@ function closeConfigFieldEdit() {
                     <span class="sk" title="JEPA encoder checkpoint"
                         >jepa ckpt</span
                     >
-                    <div
-                        class="sv clickable-field"
-                        @click="openFieldEdit('jepaCheckpoint', $event)"
-                    >
-                        <span v-if="jepaCheckpoint">{{ jepaCheckpoint }}</span>
-                        <span v-else class="cf-muted">none</span>
+                    <div class="sv">
+                        <span class="clickable-field" @click="openFieldEdit('jepaCheckpoint', $event)">
+                            <span v-if="jepaCheckpoint">{{ jepaCheckpoint }}</span>
+                            <span v-else class="cf-muted">none</span>
+                        </span>
                     </div>
                 </template>
 
@@ -1337,22 +1677,6 @@ function closeConfigFieldEdit() {
                         compact
                     />
                 </template>
-
-                <span class="sk" title="Random steps before learning begins"
-                    >warmup</span
-                >
-                <div class="sv mi-sv">
-                    <span
-                        class="clickable-field"
-                        @click="openFieldEdit('warmup', $event)"
-                        >{{ warmup }}</span
-                    >
-                    <span
-                        class="mi-desc"
-                        data-tip="Random steps before learning begins. Fills the replay buffer with initial experience so the first gradient updates are stable. Set higher for complex environments."
-                        >random steps to fill replay buffer</span
-                    >
-                </div>
 
                 <span class="sk" title="Additional training steps"
                     >+ steps</span
@@ -1372,30 +1696,9 @@ function closeConfigFieldEdit() {
                     </span>
                 </div>
 
-                <span class="sk" title="Minibatch size">batch</span>
-                <div
-                    class="sv clickable-field"
-                    @click="openFieldEdit('batch', $event)"
-                >
-                    <span v-if="batch">{{ batch }}</span>
-                    <span v-else class="cf-muted">auto</span>
-                </div>
-
-                <span class="sk" title="Learning rate override">lr</span>
-                <div
-                    class="sv clickable-field"
-                    @click="openFieldEdit('lr', $event)"
-                >
-                    <span v-if="lr">{{ lr }}</span>
-                    <span v-else class="cf-muted">auto</span>
-                </div>
-
                 <span class="sk" title="Log every N steps">log every</span>
-                <div
-                    class="sv clickable-field"
-                    @click="openFieldEdit('logEvery', $event)"
-                >
-                    {{ logEvery }}
+                <div class="sv">
+                    <span class="clickable-field" @click="openFieldEdit('logEvery', $event)">{{ logEvery }}</span>
                 </div>
 
                 <span class="sk" title="Show browser during training"
@@ -1415,8 +1718,8 @@ function closeConfigFieldEdit() {
                     <span
                         class="mi-desc"
                         data-tip="Show the browser window during training. Useful for visually debugging agent behavior, but significantly slower due to rendering overhead. Keep off for serious training runs."
-                        >show browser window (slower)</span
-                    >
+                        data-short="show browser window (slower)"
+                    ></span>
                 </div>
             </div>
 
@@ -1435,6 +1738,7 @@ function closeConfigFieldEdit() {
                     @click="startTraining"
                     v-if="!busy"
                     class="btn-accent-tiny"
+                    :disabled="!runs.selectedRun"
                 >
                     train
                 </button>
@@ -1455,7 +1759,7 @@ function closeConfigFieldEdit() {
             @click="closeFieldEdit"
         ></div>
         <div v-if="editingField" class="popover" :style="editPopoverStyle">
-            <div class="popover-label">{{ editingField }}</div>
+            <div class="popover-label">{{ editingFieldLabel }}</div>
             <input
                 v-model="editValue"
                 type="text"
@@ -1467,38 +1771,6 @@ function closeConfigFieldEdit() {
             <div class="popover-actions">
                 <button class="btn-tiny" @click="closeFieldEdit">cancel</button>
                 <button class="btn-accent-tiny" @click="saveFieldEdit">
-                    save
-                </button>
-            </div>
-        </div>
-
-        <!-- Config field edit popover -->
-        <div
-            v-if="editingConfigField"
-            class="popover-backdrop"
-            @click="closeConfigFieldEdit"
-        ></div>
-        <div
-            v-if="editingConfigField"
-            class="popover"
-            :style="configPopoverStyle"
-        >
-            <div class="popover-label">
-                {{ configEditMeta.group }}.{{ configEditMeta.key }}
-            </div>
-            <input
-                v-model="configEditValue"
-                type="text"
-                class="popover-input"
-                @keydown.enter="saveConfigFieldEdit"
-                @keydown.escape="closeConfigFieldEdit"
-                autofocus
-            />
-            <div class="popover-actions">
-                <button class="btn-tiny" @click="closeConfigFieldEdit">
-                    cancel
-                </button>
-                <button class="btn-accent-tiny" @click="saveConfigFieldEdit">
                     save
                 </button>
             </div>
@@ -1806,6 +2078,60 @@ function closeConfigFieldEdit() {
     font-weight: 600;
 }
 
+.pipe-run-card {
+    display: grid;
+    grid-template-columns: 68px 1fr;
+    gap: 2px 10px;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 5px 8px;
+    font-size: 10px;
+}
+.pipe-run-card .sk {
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 8px;
+}
+.pipe-run-card .sv {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.run-lock-state {
+    color: var(--muted);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.mi-table-locked .clickable-field {
+    color: var(--text);
+    border-bottom-color: transparent;
+    cursor: default;
+}
+.mi-table-locked .clickable-field:hover {
+    color: var(--text);
+    border-bottom-color: transparent;
+}
+.cf-locked {
+    color: var(--text);
+    cursor: default;
+    border-bottom: none;
+}
+.cf-locked:hover {
+    color: var(--text);
+    border-bottom: none;
+}
+
+button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 /* Validation error only */
 .pipe-validation {
     display: flex;
@@ -1883,16 +2209,24 @@ function closeConfigFieldEdit() {
 
 /* Inline description with hover tooltip */
 .mi-desc {
-    font-size: 9px;
-    color: var(--muted);
     position: relative;
     cursor: help;
     flex: 1;
     min-width: 0;
+    line-height: 1.4;
+    display: flex;
+    font-size: 0;
+}
+.mi-desc::before {
+    content: attr(data-short);
+    display: block;
+    font-size: 9px;
+    color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    line-height: 1.4;
+    flex: 1;
+    min-width: 0;
 }
 .mi-desc::after {
     content: attr(data-tip);
@@ -1971,6 +2305,45 @@ function closeConfigFieldEdit() {
 .pipe-data-fields .settings-table {
     border-radius: 3px;
 }
+.pipe-data-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+.pipe-data-toggle input {
+    display: none;
+}
+.toggle-track {
+    width: 28px;
+    height: 14px;
+    background: var(--border);
+    border-radius: 7px;
+    position: relative;
+    transition: background 0.2s;
+}
+.pipe-data-toggle input:checked + .toggle-track {
+    background: var(--accent);
+}
+.toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--text);
+    transition: transform 0.2s;
+}
+.pipe-data-toggle input:checked + .toggle-track .toggle-thumb {
+    transform: translateX(14px);
+}
+.toggle-label {
+    font-size: 9px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
 
 /* Datasets panel */
 .pipe-data-datasets {
@@ -1984,6 +2357,17 @@ function closeConfigFieldEdit() {
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.pipe-ds-count {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 8px;
+    color: var(--accent);
+    background: rgba(196, 145, 82, 0.1);
+    border-radius: 2px;
+    padding: 0 4px;
 }
 .pipe-ds-empty {
     font-size: 9px;
@@ -2015,6 +2399,13 @@ function closeConfigFieldEdit() {
     border-color: rgba(93, 158, 93, 0.4);
     background: rgba(93, 158, 93, 0.06);
 }
+.pipe-ds-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    flex: 1;
+}
 .pipe-ds-name {
     font-family: "IBM Plex Mono", monospace;
     font-size: 9px;
@@ -2027,53 +2418,69 @@ function closeConfigFieldEdit() {
     font-family: "IBM Plex Mono", monospace;
     font-size: 8px;
     color: var(--muted);
-    flex-shrink: 0;
-    margin-left: 6px;
+}
+.pipe-ds-del {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s;
+}
+.pipe-ds-item:hover .pipe-ds-del,
+.pipe-ds-detail .pipe-ds-del {
+    opacity: 1;
+}
+.pipe-ds-del:hover {
+    color: var(--red);
 }
 
-/* Collection progress */
-.pipe-data-progress {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 6px;
+/* Selected dataset detail */
+.pipe-ds-detail {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 3px;
+    padding: 5px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-height: 52px;
+    justify-content: center;
 }
-.pipe-dp-label {
+.pipe-ds-detail-empty {
+    font-size: 9px;
+    color: var(--muted);
+    font-style: italic;
+    opacity: 0.5;
+    text-align: center;
+}
+.pipe-ds-detail-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.pipe-ds-detail-name {
+    font-family: "IBM Plex Mono", monospace;
     font-size: 9px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
     color: var(--green);
-    flex-shrink: 0;
-}
-.pipe-dp-track {
-    flex: 1;
-    height: 3px;
-    background: var(--bg);
-    border-radius: 2px;
     overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
-.pipe-dp-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--green), var(--accent));
-    border-radius: 2px;
-    transition: width 0.3s ease;
-}
-.pipe-dp-count {
+.pipe-ds-detail-stats,
+.pipe-ds-detail-scores {
+    display: flex;
+    gap: 8px;
     font-family: "IBM Plex Mono", monospace;
-    font-size: 10px;
-    color: var(--text);
-    font-weight: 500;
-    flex-shrink: 0;
+    font-size: 8px;
+    color: var(--muted);
 }
-.pipe-dp-score {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 9px;
+.pipe-ds-detail-scores span:first-child {
     color: var(--accent);
-    flex-shrink: 0;
 }
 
 /* Navigation */

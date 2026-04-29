@@ -27,6 +27,7 @@
       body.embed {
         overflow: hidden;
         min-height: auto;
+        background: transparent;
       }
       body.embed main {
         width: 100%;
@@ -42,6 +43,8 @@
         width: 100%;
         height: auto;
         aspect-ratio: 4 / 3;
+        background: transparent;
+        border-color: transparent;
       }
 
       header, #status {
@@ -130,13 +133,15 @@
       let lastFrameTime = 0;
       const REF_DT = 1000 / 60;
       let particles = [];
+      let gameStartTime = 0;
+      let actionCount = 0;
       const BOARD_KEY = "jeparl_snake";
 
       function postScores(scores) {
         try { window.parent.postMessage({ type: "jeparl-scores", game: BOARD_KEY, scores: scores || loadBoard() }, "*"); } catch {}
       }
 
-      function isAI() { return window.location.search.includes("embed"); }
+      function isAI() { return new URLSearchParams(window.location.search).has("run_name"); }
 
       function getPlayerLabel() {
         const params = new URLSearchParams(window.location.search);
@@ -150,6 +155,16 @@
         return params.get("player_name") || "HUMAN";
       }
 
+      function getMetadata() {
+        const params = new URLSearchParams(window.location.search);
+        return {
+          algorithm: params.get("algorithm") || "",
+          encoder: params.get("encoder") || "",
+          latent_dim: params.get("latent_dim") || "",
+          steps_trained: params.get("steps_trained") || ""
+        };
+      }
+
       function loadBoard() {
         try { return JSON.parse(localStorage.getItem(BOARD_KEY) || "[]"); }
         catch { return []; }
@@ -158,7 +173,11 @@
       function saveToBoard(s) {
         if (s <= 0) return loadBoard();
         const scores = loadBoard();
-        scores.push({ score: s, player: getPlayerLabel(), type: isAI() ? "ai" : "human", date: new Date().toISOString() });
+        const elapsed = gameStartTime > 0 ? (Date.now() - gameStartTime) / 1000 : 0;
+        const apm = elapsed > 0 ? Math.round(actionCount / (elapsed / 60)) : 0;
+        const entry = { score: s, player: getPlayerLabel(), type: isAI() ? "ai" : "human", date: new Date().toISOString(), apm: apm };
+        if (isAI()) Object.assign(entry, getMetadata());
+        scores.push(entry);
         scores.sort((a, b) => b.score - a.score);
         if (scores.length > 10) scores.length = 10;
         try { localStorage.setItem(BOARD_KEY, JSON.stringify(scores)); } catch {}
@@ -232,6 +251,8 @@
         lives = 3;
         done = false;
         waiting = true;
+        actionCount = 0;
+        gameStartTime = 0;
         particles = [];
         resetSnake();
         spawnFood();
@@ -295,6 +316,7 @@
           event.preventDefault();
           if (waiting && !done) {
             waiting = false;
+            gameStartTime = Date.now();
             lastMove = performance.now();
           }
         }
@@ -302,6 +324,7 @@
           resetGame();
         }
         if (done || waiting) return;
+        actionCount++;
 
         switch (mapped) {
           case "ArrowUp":
@@ -349,10 +372,11 @@
 
       let tick = 0;
 
+      const bgColor = isAI() ? "transparent" : "#07090d";
       function draw() {
         tick++;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = "#07090d";
+        ctx.fillStyle = bgColor;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         // Food — pulsing glow
@@ -483,10 +507,18 @@
         if (done) {
           ctx.fillStyle = "rgba(7, 9, 13, 0.72)";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
+          const elapsed = gameStartTime > 0 ? (Date.now() - gameStartTime) / 1000 : 0;
+          const apm = elapsed > 0 ? Math.round(actionCount / (elapsed / 60)) : 0;
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#f4f6fb";
+          ctx.font = "700 22px system-ui";
+          ctx.fillText(String(score), canvas.width / 2, canvas.height / 2 - 24);
+          ctx.fillStyle = "#7a8499";
+          ctx.font = "400 12px system-ui";
+          ctx.fillText(apm + " APM", canvas.width / 2, canvas.height / 2 + 4);
           ctx.fillStyle = "#aeb8ca";
           ctx.font = "400 13px system-ui";
-          ctx.textAlign = "center";
-          ctx.fillText(`Score: ${score} · R to restart`, canvas.width / 2, canvas.height / 2);
+          ctx.fillText("Press R to restart", canvas.width / 2, canvas.height / 2 + 32);
         }
       }
 

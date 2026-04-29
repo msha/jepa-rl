@@ -27,6 +27,7 @@
       body.embed {
         overflow: hidden;
         min-height: auto;
+        background: transparent;
       }
       body.embed main {
         width: 100%;
@@ -83,6 +84,11 @@
         outline: none;
       }
 
+      body.embed canvas {
+        background: transparent;
+        border-color: transparent;
+      }
+
       #status {
         min-height: 22px;
         margin-top: 8px;
@@ -133,8 +139,9 @@
       const brickH = 18;
       const brickOffsetX = Math.floor((canvas.width - brickCols * brickW - (brickCols - 1) * brickGap) / 2);
       const brickOffsetY = 52;
-      const WAVE_THRESHOLD = 10; // spawn new wave when fewer than this many alive
-      const DANGER_Y = 360;     // bricks past this y trigger game over
+      const TILES_DESTROYED_THRESHOLD = 15;
+      const MIN_TILES = 25;
+      const DANGER_Y = 360;
 
       const REF_DT = 1000 / 60;
       let lastFrameTime = 0;
@@ -148,13 +155,16 @@
       let done = false;
       let serving = true;
       let waiting = true;
+      let tilesDestroyedSinceLastRow = 0;
+      let gameStartTime = 0;
+      let actionCount = 0;
       const BOARD_KEY = "jeparl_breakout";
 
       function postScores(scores) {
         try { window.parent.postMessage({ type: "jeparl-scores", game: BOARD_KEY, scores: scores || loadBoard() }, "*"); } catch {}
       }
 
-      function isAI() { return window.location.search.includes("embed"); }
+      function isAI() { return new URLSearchParams(window.location.search).has("run_name"); }
 
       function getPlayerLabel() {
         const params = new URLSearchParams(window.location.search);
@@ -168,6 +178,16 @@
         return params.get("player_name") || "HUMAN";
       }
 
+      function getMetadata() {
+        const params = new URLSearchParams(window.location.search);
+        return {
+          algorithm: params.get("algorithm") || "",
+          encoder: params.get("encoder") || "",
+          latent_dim: params.get("latent_dim") || "",
+          steps_trained: params.get("steps_trained") || ""
+        };
+      }
+
       function loadBoard() {
         try { return JSON.parse(localStorage.getItem(BOARD_KEY) || "[]"); }
         catch { return []; }
@@ -176,7 +196,11 @@
       function saveToBoard(s) {
         if (s <= 0) return loadBoard();
         const scores = loadBoard();
-        scores.push({ score: s, player: getPlayerLabel(), type: isAI() ? "ai" : "human", date: new Date().toISOString() });
+        const elapsed = gameStartTime > 0 ? (Date.now() - gameStartTime) / 1000 : 0;
+        const apm = elapsed > 0 ? Math.round(actionCount / (elapsed / 60)) : 0;
+        const entry = { score: s, player: getPlayerLabel(), type: isAI() ? "ai" : "human", date: new Date().toISOString(), apm: apm };
+        if (isAI()) Object.assign(entry, getMetadata());
+        scores.push(entry);
         scores.sort((a, b) => b.score - a.score);
         if (scores.length > 10) scores.length = 10;
         try { localStorage.setItem(BOARD_KEY, JSON.stringify(scores)); } catch {}
@@ -220,36 +244,53 @@
         }
       }
 
-      function spawnWave() {
+      function spawnSingleRow() {
         const rowH = brickH + brickGap;
-        // push all surviving bricks down by one full grid height
         for (const b of bricks) {
-          if (b.alive) b.y += brickRows * rowH;
+          if (b.alive) b.y += rowH;
         }
-        // remove dead bricks to keep array lean
         bricks = bricks.filter((b) => b.alive);
-        // check if any surviving brick is past the danger zone
         for (const b of bricks) {
           if (b.y + b.h >= DANGER_Y) {
             setDone("Done");
             return;
           }
         }
-        // spawn new rows at the top
         wave += 1;
-        for (let row = 0; row < brickRows; row += 1) {
-          for (let col = 0; col < brickCols; col += 1) {
-            const hp = brickHPForWave(row, wave);
-            bricks.push({
-              x: brickOffsetX + col * (brickW + brickGap),
-              y: brickOffsetY + row * (brickH + brickGap),
-              w: brickW,
-              h: brickH,
-              alive: true,
-              row,
-              hp,
-              maxHP: hp,
-            });
+        for (let col = 0; col < brickCols; col++) {
+          const hp = brickHPForWave(0, wave);
+          bricks.push({
+            x: brickOffsetX + col * (brickW + brickGap),
+            y: brickOffsetY,
+            w: brickW,
+            h: brickH,
+            alive: true,
+            row: 0,
+            hp,
+            maxHP: hp,
+          });
+        }
+        tilesDestroyedSinceLastRow = 0;
+      }
+
+      function isBottomRowGone() {
+        let maxY = -1;
+        for (const b of bricks) {
+          if (b.y > maxY) maxY = b.y;
+        }
+        if (maxY < 0) return true;
+        return !bricks.some((b) => b.alive && b.y === maxY);
+      }
+
+      function checkAndSpawnRows() {
+        let spawns = 0;
+        while (spawns < 3 && !done) {
+          const alive = bricks.filter((b) => b.alive).length;
+          if (alive < MIN_TILES || tilesDestroyedSinceLastRow >= TILES_DESTROYED_THRESHOLD || isBottomRowGone()) {
+            spawnSingleRow();
+            spawns++;
+          } else {
+            break;
           }
         }
       }
@@ -276,6 +317,9 @@
         wave = 1;
         done = false;
         waiting = true;
+        tilesDestroyedSinceLastRow = 0;
+        actionCount = 0;
+        gameStartTime = 0;
         paddle.x = 270;
         paddle.vx = 0;
         particles = [];
@@ -323,10 +367,12 @@
                      : k === 'd' || k === 'D' ? 'ArrowRight'
                      : k;
         keys.add(mapped);
+        if (!waiting && !done) actionCount++;
         if (mapped === " ") {
           event.preventDefault();
           if (waiting && !done) {
             waiting = false;
+            gameStartTime = Date.now();
             return;
           }
           if (serving && !done) {
@@ -412,7 +458,6 @@
           ball.vx = speed * Math.sin(angle);
           ball.vy = -speed * Math.cos(angle);
           ball.y = paddle.y - ball.r - 1;
-          score += 1;
         }
 
         // Brick collisions — check all bricks, proper face detection
@@ -440,6 +485,7 @@
 
           if (brick.hp <= 0) {
             brick.alive = false;
+            tilesDestroyedSinceLastRow++;
             score += 5 + (brickRows - brick.row);
             const colors = ["#27d6a0", "#64a8ff", "#ffd166", "#ff5a7a", "#c084fc"];
             spawnParticles(brick.x + brick.w / 2, brick.y + brick.h / 2, colors[brick.row % colors.length], 8);
@@ -467,12 +513,9 @@
           }
         }
 
-        // Wave spawning — new bricks when few remain
+        // Row spawning
         if (!done) {
-          const alive = bricks.filter((b) => b.alive).length;
-          if (alive < WAVE_THRESHOLD) {
-            spawnWave();
-          }
+          checkAndSpawnRows();
         }
 
         // Update particles
@@ -494,9 +537,10 @@
         updateStats();
       }
 
+      const bgColor = isAI() ? "transparent" : "#07090d";
       function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = "#07090d";
+        ctx.fillStyle = bgColor;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         // Death zone line
@@ -641,10 +685,18 @@
         if (done) {
           ctx.fillStyle = "rgba(7, 9, 13, 0.72)";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
+          const elapsed = gameStartTime > 0 ? (Date.now() - gameStartTime) / 1000 : 0;
+          const apm = elapsed > 0 ? Math.round(actionCount / (elapsed / 60)) : 0;
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#f4f6fb";
+          ctx.font = "700 22px system-ui";
+          ctx.fillText(String(score), canvas.width / 2, canvas.height / 2 - 24);
+          ctx.fillStyle = "#7a8499";
+          ctx.font = "400 12px system-ui";
+          ctx.fillText(apm + " APM", canvas.width / 2, canvas.height / 2 + 4);
           ctx.fillStyle = "#aeb8ca";
           ctx.font = "400 14px system-ui";
-          ctx.textAlign = "center";
-          ctx.fillText("Press R to restart", canvas.width / 2, canvas.height / 2);
+          ctx.fillText("Press R to restart", canvas.width / 2, canvas.height / 2 + 32);
         }
       }
 

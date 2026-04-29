@@ -261,9 +261,9 @@ jepa-rl collect-random --config configs/games/breakout.yaml --experiment breakou
 jepa-rl train-world --config configs/games/breakout.yaml --experiment breakout_random_jepa_v1
 
 # Phase 3: Frozen JEPA + DQN policy-head training
-# Use a config whose agent.algorithm is frozen_jepa_dqn.
-jepa-rl train --config configs/games/breakout_frozen_jepa.yaml --experiment breakout_frozen_jepa_v1 \
-  --jepa-checkpoint runs/breakout_random_jepa_v1/checkpoints/latest.pt
+# In `jepa-rl ui`, keep the game config as breakout and choose
+# `frozen_jepa_dqn` in the run Model tab before pressing Create run.
+# The run snapshot records and locks the algorithm/model settings.
 
 # Phase 4: Joint JEPA + DQN training
 jepa-rl train --config configs/games/breakout.yaml --experiment breakout_jepa_dqn_v1

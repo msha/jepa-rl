@@ -1,8 +1,0 @@
-extends:
-  - breakout.yaml
-
-experiment:
-  name: breakout_frozen_jepa_dqn_small
-
-agent:
-  algorithm: frozen_jepa_dqn

@@ -39,6 +39,19 @@ def _unpack(field):
     return key, value, tip, meta
 
 
+def _resolve_dataclass_field(obj, key: str):
+    """Resolve editable config detail keys, including dotted nested fields."""
+    current = obj
+    for part in key.split("."):
+        if not hasattr(current, part):
+            return None
+        field_names = {f.name for f in dataclasses.fields(current)}
+        if part not in field_names:
+            return None
+        current = getattr(current, part)
+    return current
+
+
 class TestConfigFieldConsistency:
     """Every editable field key in _build_config_detail must resolve to a real dataclass field."""
 
@@ -71,15 +84,8 @@ class TestConfigFieldConsistency:
                 if sub is None:
                     errors.append(f"group '{title}' not found in group_map")
                     continue
-                if not hasattr(sub, key):
+                if _resolve_dataclass_field(sub, key) is None:
                     errors.append(f"{title}.{key} not found on {type(sub).__name__}")
-                else:
-                    field_names = {f.name for f in dataclasses.fields(sub)}
-                    if key not in field_names:
-                        errors.append(
-                            f"{title}.{key} exists as attr but is not a dataclass field "
-                            f"on {type(sub).__name__} (missing from read-only set?)"
-                        )
 
         assert not errors, "Field mismatches:\n" + "\n".join(errors)
 
@@ -216,6 +222,11 @@ class TestApplyConfigOverride:
         cfg = self._cfg()
         new = _apply_config_override(cfg, "agent", "train_every", "2")
         assert new.agent.train_every == 2
+
+    def test_agent_optimizer_lr(self):
+        cfg = self._cfg()
+        new = _apply_config_override(cfg, "agent", "optimizer.lr", "0.0002")
+        assert new.agent.optimizer.lr == 0.0002
 
     # --- exploration ---
 

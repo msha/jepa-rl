@@ -1,5 +1,6 @@
 import base64
 import collections
+import contextlib
 import dataclasses
 import io
 import json
@@ -64,6 +65,8 @@ class CollectJob:
     error: str | None = None
     started_at: float = field(default_factory=time.time)
     completed_at: float | None = None
+    save_frames: bool = False
+    scores: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -219,6 +222,12 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 self._handle_collect_random_start()
             elif parsed.path == "/api/collect-random/stop":
                 self._handle_collect_random_stop()
+            elif parsed.path == "/api/collect-random/step":
+                self._handle_collect_random_step()
+            elif parsed.path == "/api/run/create":
+                self._handle_run_create()
+            elif parsed.path == "/api/run/select":
+                self._handle_run_select()
             elif parsed.path == "/api/train-world/start":
                 self._handle_train_world_start()
             elif parsed.path == "/api/train-world/stop":
@@ -261,17 +270,46 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
 
                 run_name = str(body.get("experiment") or state.experiment)
                 steps = int(body.get("steps") or state.default_steps)
-                learning_starts = int(body.get("learning_starts") or state.learning_starts)
-                batch_size_value = body.get("batch_size", state.batch_size)
-                batch_size = int(batch_size_value) if batch_size_value not in (None, "") else None
                 dashboard_every = int(body.get("dashboard_every") or state.dashboard_every)
-                lr_value = body.get("lr")
-                lr = float(lr_value) if lr_value not in (None, "") else None
                 headed = bool(body.get("headed", False))
                 jepa_ckpt_str = body.get("jepa_checkpoint")
                 jepa_checkpoint = Path(jepa_ckpt_str) if jepa_ckpt_str else None
-                run_dir = create_run_dir(state.config.experiment.output_dir, run_name)
-                snapshot_config(state.config, run_dir / "config.yaml")
+                try:
+                    _validate_run_name(run_name)
+                    run_dir = Path(state.config.experiment.output_dir) / run_name
+                    snapshot = run_dir / "config.yaml"
+                    if snapshot.exists():
+                        if _has_locked_start_overrides(body):
+                            self._send_json(
+                                {
+                                    "ok": False,
+                                    "error": (
+                                        "run model settings are locked after creation; "
+                                        "create a new run to change algorithm, observation, "
+                                        "optimizer, replay, or exploration settings"
+                                    ),
+                                },
+                                status=409,
+                            )
+                            return
+                        run_config = load_config(snapshot)
+                        run_dir = create_run_dir(run_config.experiment.output_dir, run_name)
+                    else:
+                        overrides = list(body.get("overrides") or [])
+                        overrides.extend(_legacy_start_overrides(body))
+                        run_config = _apply_config_overrides(state.config, overrides)
+                        run_config = dataclasses.replace(
+                            run_config,
+                            experiment=dataclasses.replace(
+                                run_config.experiment, name=run_name
+                            ),
+                        )
+                        run_dir = create_run_dir(run_config.experiment.output_dir, run_name)
+                        snapshot_config(run_config, run_dir / "config.yaml")
+                except (OSError, TypeError, ValueError) as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+                    return
+
                 stop_event = threading.Event()
                 job = TrainingJob(
                     run_name=run_name,
@@ -282,13 +320,14 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                         target=_training_worker,
                         args=(
                             state,
+                            run_config,
                             run_name,
                             steps,
-                            learning_starts,
-                            batch_size,
+                            run_config.agent.learning_starts,
+                            run_config.agent.batch_size,
                             dashboard_every,
                             stop_event,
-                            lr,
+                            None,
                             headed,
                             jepa_checkpoint,
                         ),
@@ -518,13 +557,16 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             try:
                 import numpy as np
 
+                q_values_list: list[float] = []
                 obs = np.concatenate(frames, axis=0)
                 if algorithm in {"dqn", "frozen_jepa_dqn"}:
                     import torch
 
                     obs_t = torch.from_numpy(obs[None]).to(device)
                     with torch.no_grad():
-                        action_idx = int(model(obs_t).argmax(dim=1).item())
+                        q_out = model(obs_t)
+                        action_idx = int(q_out.argmax(dim=1).item())
+                        q_values_list = q_out.squeeze().tolist()
                 elif algorithm == "joint_jepa_dqn":
                     import torch
 
@@ -532,7 +574,9 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     obs_t = torch.from_numpy(obs[None]).float().to(device)
                     with torch.no_grad():
                         _z = _jepa_m.encode(obs_t)
-                        action_idx = int(_q_m(_z).argmax(dim=1).item())
+                        q_out = _q_m(_z)
+                        action_idx = int(q_out.argmax(dim=1).item())
+                        q_values_list = q_out.squeeze().tolist()
                 else:
                     from jepa_rl.envs.browser_game_env import Observation
                     from jepa_rl.training.simple_q import featurize_observation
@@ -544,7 +588,9 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                         channels=obs.shape[0],
                     )
                     features = featurize_observation(observation)
-                    action_idx = int(np.argmax(model.q_values(features)))
+                    raw_q = model.q_values(features)
+                    action_idx = int(np.argmax(raw_q))
+                    q_values_list = raw_q.tolist()
                 action_key = eval_config.actions.keys[action_idx]
             except Exception as exc:  # noqa: BLE001
                 with state.lock:
@@ -553,7 +599,15 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 self._send_json({"ok": False, "error": f"inference failed: {exc}"}, status=500)
                 return
 
-            self._send_json({"ok": True, "done": False, "complete": False, "action": action_key})
+            self._send_json(
+                {
+                    "ok": True,
+                    "done": False,
+                    "complete": False,
+                    "action": action_key,
+                    "q_values": q_values_list,
+                }
+            )
 
         def _handle_eval_stop(self) -> None:
             with state.lock:
@@ -634,7 +688,10 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
         def _handle_collect_random_start(self) -> None:
             body = self._read_json_body()
             with state.lock:
-                if state.collect_job is not None and state.collect_job.thread.is_alive():
+                if state.collect_job is not None and (
+                    state.collect_job.thread.is_alive()
+                    or state.collect_job.status == "running"
+                ):
                     self._send_json(
                         {"ok": False, "error": "collection already running"}, status=409
                     )
@@ -643,32 +700,213 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 episodes = int(body.get("episodes") or 5)
                 max_steps = int(body.get("max_steps") or 200)
                 headed = bool(body.get("headed", False))
+                save_frames = bool(body.get("save_frames", False))
                 run_dir = create_run_dir(state.config.experiment.output_dir, run_name)
                 snapshot_config(state.config, run_dir / "config.yaml")
                 stop_event = threading.Event()
-                cj = CollectJob(
-                    run_name=run_name,
-                    run_dir=run_dir,
-                    episodes_target=episodes,
-                    stop_event=stop_event,
-                    thread=threading.Thread(
-                        target=_collect_random_worker,
-                        args=(state, run_name, run_dir, episodes, max_steps, headed, stop_event),
-                        daemon=True,
-                    ),
-                )
-                state.collect_job = cj
-                cj.thread.start()
+                if headed:
+                    # Server-driven mode: background Playwright worker
+                    cj = CollectJob(
+                        run_name=run_name,
+                        run_dir=run_dir,
+                        episodes_target=episodes,
+                        stop_event=stop_event,
+                        thread=threading.Thread(
+                            target=_collect_random_worker,
+                            args=(
+                                state, run_name, run_dir,
+                                episodes, max_steps, headed, stop_event,
+                            ),
+                            daemon=True,
+                        ),
+                        save_frames=save_frames,
+                    )
+                    state.collect_job = cj
+                    cj.thread.start()
+                else:
+                    # Client-driven mode: frontend sends steps via /api/collect-random/step
+                    dummy_thread = threading.Thread(daemon=True)
+                    cj = CollectJob(
+                        run_name=run_name,
+                        run_dir=run_dir,
+                        episodes_target=episodes,
+                        stop_event=stop_event,
+                        thread=dummy_thread,
+                        save_frames=save_frames,
+                    )
+                    cj.status = "running"
+                    state.collect_job = cj
             self._send_json({"ok": True, "run_dir": str(run_dir)})
 
         def _handle_collect_random_stop(self) -> None:
             with state.lock:
-                if state.collect_job is None or not state.collect_job.thread.is_alive():
+                if state.collect_job is None:
                     self._send_json({"ok": True, "status": "not_running"})
                     return
-                state.collect_job.stop_event.set()
-                state.collect_job.status = "stopping"
-            self._send_json({"ok": True, "status": "stopping"})
+                if state.collect_job.thread.is_alive():
+                    state.collect_job.stop_event.set()
+                state.collect_job.status = "stopped"
+                state.collect_job.completed_at = time.time()
+            self._send_json({"ok": True, "status": "stopped"})
+
+        def _handle_collect_random_step(self) -> None:
+            import random as _random
+
+            with state.lock:
+                cj = state.collect_job
+            if cj is None or cj.status not in ("running", "starting"):
+                self._send_json(
+                    {
+                        "ok": False,
+                        "error": (
+                            "no collection running; "
+                            "call /api/collect-random/start first"
+                        ),
+                    },
+                    status=400,
+                )
+                return
+            body = self._read_json_body()
+            is_done = bool(body.get("done", False))
+            score = float(body.get("score") or 0.0)
+            frame_b64 = body.get("frame", "")
+
+            # Save frame if requested
+            if cj.save_frames and frame_b64:
+                try:
+                    png_bytes = base64.b64decode(frame_b64)
+                    frame_path = cj.run_dir / "frame.png"
+                    frame_path.write_bytes(png_bytes)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if is_done:
+                with state.lock:
+                    cj.scores.append(score)
+                    cj.episodes_done += 1
+                    cj.mean_score = float(sum(cj.scores) / len(cj.scores))
+                    ep_count = cj.episodes_done
+                    ep_target = cj.episodes_target
+                    complete = ep_count >= ep_target
+                    if complete:
+                        cj.status = "completed"
+                        cj.completed_at = time.time()
+                self._send_json(
+                    {"ok": True, "done": True, "complete": complete, "episode": ep_count}
+                )
+                return
+
+            # Pick random action
+            num_actions = state.config.actions.num_actions
+            action_idx = _random.randrange(num_actions)
+            action_key = state.config.actions.keys[action_idx]
+            self._send_json({"ok": True, "done": False, "complete": False, "action": action_key})
+
+        def _handle_run_create(self) -> None:
+            body = self._read_json_body()
+            run_name = str(body.get("name") or body.get("experiment") or "").strip()
+            if not run_name:
+                self._send_json({"ok": False, "error": "run name required"}, status=400)
+                return
+            with state.lock:
+                if state.job is not None and state.job.thread.is_alive():
+                    self._send_json(
+                        {"ok": False, "error": "cannot create a run while training"},
+                        status=409,
+                    )
+                    return
+                try:
+                    _validate_run_name(run_name)
+                    run_dir = Path(state.config.experiment.output_dir) / run_name
+                    if (run_dir / "config.yaml").exists():
+                        self._send_json(
+                            {"ok": False, "error": "run already exists"},
+                            status=409,
+                        )
+                        return
+                    run_config = _apply_config_overrides(
+                        state.config,
+                        body.get("overrides", []),
+                    )
+                    run_config = dataclasses.replace(
+                        run_config,
+                        experiment=dataclasses.replace(
+                            run_config.experiment, name=run_name
+                        ),
+                    )
+                    run_dir = create_run_dir(run_config.experiment.output_dir, run_name)
+                    snapshot_config(run_config, run_dir / "config.yaml")
+                    state.experiment = run_name
+                    state.run_dir = run_dir
+                    state.live_step_events.clear()
+                except (OSError, TypeError, ValueError) as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+                    return
+            self._send_json(
+                {
+                    "ok": True,
+                    "name": run_name,
+                    "run_dir": str(run_dir),
+                    "detail": _build_config_detail(run_config),
+                    "model_info": _build_model_info(run_config),
+                    "checkpoints": _list_checkpoints(
+                        run_dir, algorithm=run_config.agent.algorithm
+                    ),
+                }
+            )
+
+        def _handle_run_select(self) -> None:
+            body = self._read_json_body()
+            run_name = str(body.get("name") or "").strip()
+            if not run_name:
+                self._send_json({"ok": False, "error": "run name required"}, status=400)
+                return
+            with state.lock:
+                if (
+                    state.job is not None
+                    and state.job.thread.is_alive()
+                    and state.job.run_name != run_name
+                ):
+                    self._send_json(
+                        {"ok": False, "error": "cannot switch runs while training"},
+                        status=409,
+                    )
+                    return
+                try:
+                    _validate_run_name(run_name)
+                except ValueError as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+                    return
+                run_dir = Path(state.config.experiment.output_dir) / run_name
+                snapshot = run_dir / "config.yaml"
+                if not snapshot.exists():
+                    self._send_json({"ok": False, "error": "run not found"}, status=404)
+                    return
+                try:
+                    run_config = load_config(snapshot)
+                except Exception as exc:  # noqa: BLE001
+                    self._send_json(
+                        {"ok": False, "error": f"run config invalid: {exc}"},
+                        status=400,
+                    )
+                    return
+                state.experiment = run_name
+                state.run_dir = run_dir
+                state.live_step_events.clear()
+            summary = _read_json(run_dir / "metrics" / "train_summary.json")
+            self._send_json(
+                {
+                    "ok": True,
+                    "name": run_name,
+                    "run_dir": str(run_dir),
+                    "detail": _build_config_detail(run_config),
+                    "summary": summary,
+                    "model_info": _build_model_info(run_config),
+                    "checkpoints": _list_checkpoints(
+                        run_dir, algorithm=run_config.agent.algorithm
+                    ),
+                }
+            )
 
         def _handle_train_world_start(self) -> None:
             body = self._read_json_body()
@@ -690,8 +928,12 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 lr = float(lr_val) if lr_val not in (None, "") else None
                 dashboard_every = int(body.get("dashboard_every") or 25)
                 headed = bool(body.get("headed", False))
-                run_dir = create_run_dir(state.config.experiment.output_dir, run_name)
-                snapshot_config(state.config, run_dir / "config.yaml")
+                world_config = state.config
+                active_snapshot = state.run_dir / "config.yaml"
+                if active_snapshot.exists():
+                    world_config = load_config(active_snapshot)
+                run_dir = create_run_dir(world_config.experiment.output_dir, run_name)
+                snapshot_config(world_config, run_dir / "config.yaml")
                 stop_event = threading.Event()
                 wj = TrainingJob(
                     run_name=run_name,
@@ -702,6 +944,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                         target=_train_world_worker,
                         args=(
                             state,
+                            world_config,
                             run_name,
                             steps,
                             collect_steps,
@@ -770,6 +1013,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                         value = str(item.get("value", ""))
                         new_config = _apply_config_override(new_config, group, key, value)
                     state.config = new_config
+                    snapshot_config(new_config, state.config_path)
                 except Exception as exc:  # noqa: BLE001
                     self._send_json({"ok": False, "error": str(exc)}, status=400)
                     return
@@ -895,14 +1139,25 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 detail = _build_config_detail(run_config)
             except Exception:  # noqa: BLE001
                 detail = []
+                run_config = None
             summary = _read_json(run_dir / "metrics" / "train_summary.json")
-            algo = str(summary.get("algorithm", ""))
+            algo = str(
+                summary.get(
+                    "algorithm",
+                    run_config.agent.algorithm if run_config is not None else "",
+                )
+            )
             self._send_json(
                 {
                     "detail": detail,
                     "summary": summary,
                     "checkpoints": _list_checkpoints(run_dir, algorithm=algo),
                     "run_dir": str(run_dir),
+                    "model_info": (
+                        _build_model_info(run_config)
+                        if run_config is not None
+                        else {}
+                    ),
                 }
             )
 
@@ -911,6 +1166,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
 
 def _training_worker(
     state: UiState,
+    config: ProjectConfig,
     run_name: str,
     steps: int,
     learning_starts: int,
@@ -926,7 +1182,7 @@ def _training_worker(
             state.job.status = "running"
             job_run_dir = state.job.run_dir
     try:
-        algorithm = state.config.agent.algorithm
+        algorithm = config.agent.algorithm
         screenshot = job_run_dir / "frame.png"
 
         def live_step_callback(event: dict[str, Any]) -> None:
@@ -937,7 +1193,7 @@ def _training_worker(
             from jepa_rl.training.pixel_dqn import train_dqn
 
             train_dqn(
-                state.config,
+                config,
                 experiment=run_name,
                 steps=steps,
                 learning_starts=learning_starts,
@@ -953,15 +1209,15 @@ def _training_worker(
 
             if jepa_checkpoint is None:
                 jepa_ckpt_cfg = (
-                    state.config.training.extra.get("jepa_checkpoint")
-                    if hasattr(state.config.training, "extra")
+                    config.training.extra.get("jepa_checkpoint")
+                    if hasattr(config.training, "extra")
                     else None
                 )
                 if jepa_ckpt_cfg:
                     jepa_checkpoint = Path(jepa_ckpt_cfg)
                 else:
                     candidates = sorted(
-                        Path(state.config.experiment.output_dir).glob(
+                        Path(config.experiment.output_dir).glob(
                             "*_world/checkpoints/latest.pt"
                         ),
                         reverse=True,
@@ -973,7 +1229,7 @@ def _training_worker(
                         )
                     jepa_checkpoint = candidates[0]
             train_frozen_jepa_dqn(
-                state.config,
+                config,
                 jepa_checkpoint=jepa_checkpoint,
                 experiment=run_name,
                 steps=steps,
@@ -989,7 +1245,7 @@ def _training_worker(
             from jepa_rl.training.joint_jepa_dqn import train_joint_jepa_dqn
 
             train_joint_jepa_dqn(
-                state.config,
+                config,
                 experiment=run_name,
                 steps=steps,
                 learning_starts=learning_starts,
@@ -1002,7 +1258,7 @@ def _training_worker(
             )
         else:
             train_linear_q(
-                state.config,
+                config,
                 experiment=run_name,
                 steps=steps,
                 learning_starts=learning_starts,
@@ -1125,6 +1381,7 @@ def _collect_random_worker(
 
 def _train_world_worker(
     state: UiState,
+    config: ProjectConfig,
     run_name: str,
     steps: int,
     collect_steps: int | None,
@@ -1142,7 +1399,7 @@ def _train_world_worker(
         from jepa_rl.training.jepa_world import train_jepa_world
 
         train_jepa_world(
-            state.config,
+            config,
             experiment=run_name,
             steps=steps,
             collect_steps=collect_steps,
@@ -1180,6 +1437,53 @@ _CONFIG_GROUPS: dict[str, type] = {
 }
 
 
+def _validate_run_name(name: str) -> None:
+    if not name.strip():
+        raise ValueError("run name cannot be empty")
+    if "/" in name or "\\" in name or name in {".", ".."}:
+        raise ValueError("run name cannot contain path separators")
+    if not name.replace("_", "").replace("-", "").isalnum():
+        raise ValueError("run name must be alphanumeric (dashes/underscores ok)")
+
+
+def _has_locked_start_overrides(body: dict[str, Any]) -> bool:
+    overrides = body.get("overrides")
+    if isinstance(overrides, list) and len(overrides) > 0:
+        return True
+    if overrides not in (None, "", []):
+        return True
+    return any(body.get(key) not in (None, "") for key in ("learning_starts", "batch_size", "lr"))
+
+
+def _legacy_start_overrides(body: dict[str, Any]) -> list[dict[str, str]]:
+    overrides: list[dict[str, str]] = []
+    if body.get("learning_starts") not in (None, ""):
+        overrides.append(
+            {
+                "group": "agent",
+                "key": "learning_starts",
+                "value": str(body["learning_starts"]),
+            }
+        )
+    if body.get("batch_size") not in (None, ""):
+        overrides.append(
+            {
+                "group": "agent",
+                "key": "batch_size",
+                "value": str(body["batch_size"]),
+            }
+        )
+    if body.get("lr") not in (None, ""):
+        overrides.append(
+            {
+                "group": "agent",
+                "key": "optimizer.lr",
+                "value": str(body["lr"]),
+            }
+        )
+    return overrides
+
+
 def _apply_config_override(
     config: ProjectConfig, group: str, key: str, value: str
 ) -> ProjectConfig:
@@ -1196,16 +1500,39 @@ def _apply_config_override(
         "training": config.training,
     }
     sub = group_map.get(group)
-    if sub is None or not hasattr(sub, key):
+    key_path = key.split(".")
+    if sub is None or not key_path or not hasattr(sub, key_path[0]):
         raise ValueError(f"unknown config field: {group}.{key}")
+    new_sub = _replace_config_value(sub, key_path, value, f"{group}.{key}")
+    return dataclasses.replace(config, **{group: new_sub})
+
+
+def _replace_config_value(obj: Any, path: list[str], value: str, label: str) -> Any:
+    if not path:
+        raise ValueError(f"unknown config field: {label}")
+    key = path[0]
+    if not hasattr(obj, key):
+        raise ValueError(f"unknown config field: {label}")
+    if len(path) > 1:
+        child = getattr(obj, key)
+        if not dataclasses.is_dataclass(child):
+            raise ValueError(f"unknown config field: {label}")
+        return dataclasses.replace(
+            obj,
+            **{key: _replace_config_value(child, path[1:], value, label)},
+        )
+
     field_type = None
-    for f in dataclasses.fields(sub):
+    for f in dataclasses.fields(obj):
         if f.name == key:
             field_type = f.type
             break
     if field_type is None:
-        raise ValueError(f"unknown config field: {group}.{key}")
-    if field_type in ("bool", bool):
+        raise ValueError(f"unknown config field: {label}")
+    # Map semantic color-mode values to bool for observation.grayscale
+    if label == "observation.grayscale":
+        parsed = value.lower() in ("grayscale", "true", "1", "yes")
+    elif field_type in ("bool", bool):
         parsed = value.lower() in ("true", "1", "yes")
     elif field_type in ("int", int):
         parsed = int(value)
@@ -1213,8 +1540,31 @@ def _apply_config_override(
         parsed = float(value)
     else:
         parsed = value
-    new_sub = dataclasses.replace(sub, **{key: parsed})
-    return dataclasses.replace(config, **{group: new_sub})
+    return dataclasses.replace(obj, **{key: parsed})
+
+
+def _apply_config_overrides(
+    config: ProjectConfig,
+    overrides: Any,
+) -> ProjectConfig:
+    """Apply UI run-scoped config overrides and re-run typed validation."""
+
+    if overrides in (None, ""):
+        overrides = []
+    if not isinstance(overrides, list):
+        raise TypeError("overrides must be a list")
+
+    updated = config
+    for item in overrides:
+        if not isinstance(item, dict):
+            raise TypeError("each override must be an object")
+        group = item.get("group")
+        key = item.get("key")
+        value = item.get("value")
+        if not isinstance(group, str) or not isinstance(key, str):
+            raise ValueError("each override requires group and key")
+        updated = _apply_config_override(updated, group, key, str(value))
+    return ProjectConfig.from_dict(updated.to_dict())
 
 
 def list_configs() -> dict[str, Any]:
@@ -1239,7 +1589,10 @@ def list_runs(state: UiState, include_smoke: bool = False) -> dict[str, Any]:
             if child.is_dir() and (child / "config.yaml").exists():
                 summary = _read_json(child / "metrics" / "train_summary.json")
                 algo = summary.get("algorithm", "")
-                is_smoke = algo == "linear_q" or "smoke" in child.name.lower()
+                is_smoke = (
+                    (bool(summary) and algo == "linear_q")
+                    or "smoke" in child.name.lower()
+                )
                 if is_smoke and not include_smoke:
                     continue
                 experiment_name = ""
@@ -1247,6 +1600,8 @@ def list_runs(state: UiState, include_smoke: bool = False) -> dict[str, Any]:
                     with (child / "config.yaml").open("r", encoding="utf-8") as f:
                         cfg = yaml.safe_load(f)
                     experiment_name = (cfg or {}).get("experiment", {}).get("name", "")
+                    if not algo:
+                        algo = (cfg or {}).get("agent", {}).get("algorithm", "")
                 except Exception:
                     pass
                 runs.append(
@@ -1268,7 +1623,7 @@ def _list_checkpoints(run_dir: Path, algorithm: str | None = None) -> list[dict[
     ckpt_dir = run_dir / "checkpoints"
     if not ckpt_dir.is_dir():
         return []
-    if algorithm in {"dqn", "frozen_jepa_dqn"}:
+    if algorithm in {"dqn", "pixel_dqn", "frozen_jepa_dqn", "joint_jepa_dqn"}:
         suffix = ".pt"
     elif algorithm == "linear_q":
         suffix = ".npz"
@@ -1301,132 +1656,289 @@ def _game_description(name: str) -> str:
 
 def _build_config_detail(config: ProjectConfig) -> list[dict[str, Any]]:
     # Field format: (key, value, tooltip, meta_dict)
-    # meta_dict keys: type ("text","number","select","bool","readonly"), options, min, max, step
+    # meta_dict keys: type ("text","number","select","bool","readonly"),
+    #   options, min, max, step, label (human-friendly name)
+    gs_val = "grayscale" if config.observation.grayscale else "rgb"
     groups = [
         {
             "title": "experiment",
+            "group_label": "Experiment",
             "fields": [
-                ("name", config.experiment.name, "Run identifier", {"type": "text"}),
+                ("name", config.experiment.name, "", {"type": "text", "label": "Name"}),
                 (
                     "device",
                     config.experiment.device,
-                    "Compute device",
-                    {"type": "select", "options": ["cpu", "auto", "mps", "cuda"]},
+                    "Compute device. auto picks MPS on Apple Silicon, CUDA on Nvidia.",
+                    {"type": "select", "options": ["cpu", "auto", "mps", "cuda"],
+                     "label": "Device"},
                 ),
                 (
                     "precision",
                     config.experiment.precision,
-                    "Numeric precision",
-                    {"type": "select", "options": ["fp32", "fp16", "bf16"]},
+                    "Floating-point precision. fp32 is required on MPS; fp16 only works on CUDA.",
+                    {"type": "select", "options": ["fp32", "fp16", "bf16"], "label": "Precision"},
                 ),
-                ("seed", config.experiment.seed, "Random seed", {"type": "number", "min": 0}),
+                (
+                    "seed", config.experiment.seed,
+                    "Random seed for reproducibility.",
+                    {"type": "number", "min": 0, "label": "Seed"},
+                ),
+            ],
+        },
+        {
+            "title": "observation",
+            "group_label": "Observation",
+            "fields": [
+                (
+                    "mode", config.observation.mode,
+                    "How frames are captured from the browser.",
+                    {"type": "select",
+                     "options": ["screenshot", "canvas", "dom_assisted", "hybrid"],
+                     "label": "Capture mode"},
+                ),
+                (
+                    "grayscale", gs_val,
+                    "Color mode. Grayscale reduces channels and speeds up training.",
+                    {"type": "select", "options": ["grayscale", "rgb"],
+                     "label": "Color mode"},
+                ),
+                (
+                    "width", config.observation.width,
+                    "Frame width in pixels. 84 is standard for DQN.",
+                    {"type": "number", "min": 16, "label": "Width"},
+                ),
+                (
+                    "height", config.observation.height,
+                    "Frame height in pixels. 84 is standard for DQN.",
+                    {"type": "number", "min": 16, "label": "Height"},
+                ),
+                (
+                    "frame_stack", config.observation.frame_stack,
+                    "Consecutive frames stacked for temporal context.",
+                    {"type": "number", "min": 1, "label": "Frame stack"},
+                ),
+                (
+                    "normalize", config.observation.normalize,
+                    "Scale pixel values to [0, 1]. Recommended for neural net training.",
+                    {"type": "bool", "label": "Normalize"},
+                ),
+            ],
+        },
+        {
+            "title": "game",
+            "group_label": "Game",
+            "fields": [
+                ("name", config.game.name, "",
+                 {"type": "readonly", "label": "Name"}),
+                ("url", config.game.url, "",
+                 {"type": "readonly", "label": "URL"}),
+                (
+                    "fps", config.game.fps,
+                    "Browser capture frame rate.",
+                    {"type": "number", "min": 1, "max": 120, "label": "FPS"},
+                ),
+                (
+                    "action_repeat", config.game.action_repeat,
+                    "How many times each action is repeated.",
+                    {"type": "number", "min": 1, "label": "Action repeat"},
+                ),
+                (
+                    "max_steps_per_episode", config.game.max_steps_per_episode,
+                    "Max steps before forcing episode end.",
+                    {"type": "number", "min": 100, "label": "Max steps"},
+                ),
+                (
+                    "headless", config.game.headless,
+                    "Run browser without a visible window.",
+                    {"type": "bool", "label": "Headless"},
+                ),
             ],
         },
         {
             "title": "agent",
+            "group_label": "Agent",
             "fields": [
                 (
                     "algorithm",
                     config.agent.algorithm,
-                    "RL algorithm",
-                    {
-                        "type": "select",
-                        "options": ["dqn", "frozen_jepa_dqn", "joint_jepa_dqn", "linear_q"],
-                    },
+                    "Learning algorithm. dqn: pixel Q-learning. "
+                    "frozen_jepa_dqn: pretrained encoder + Q-head. linear_q: smoke test.",
+                    {"type": "select",
+                     "options": ["dqn", "frozen_jepa_dqn", "joint_jepa_dqn",
+                                  "linear_q"],
+                     "label": "Algorithm"},
                 ),
                 (
                     "gamma",
                     config.agent.gamma,
-                    "Discount factor",
-                    {"type": "number", "min": 0, "max": 1, "step": 0.001},
+                    "Discount factor (0-1). Higher = more patient.",
+                    {"type": "number", "min": 0, "max": 1, "step": 0.001,
+                     "label": "Gamma"},
                 ),
-                ("n_step", config.agent.n_step, "N-step return", {"type": "number", "min": 1}),
-                ("batch_size", config.agent.batch_size, "Batch size", {"type": "number", "min": 1}),
+                (
+                    "n_step", config.agent.n_step,
+                    "Multi-step return length. Higher speeds up credit "
+                    "propagation but increases variance.",
+                    {"type": "number", "min": 1, "label": "N-step"},
+                ),
+                (
+                    "batch_size", config.agent.batch_size,
+                    "Minibatch size. 32-64 for small, 128-256 for large.",
+                    {"type": "number", "min": 1, "label": "Batch size"},
+                ),
                 (
                     "learning_starts",
                     config.agent.learning_starts,
-                    "Steps before learning",
-                    {"type": "number", "min": 0},
+                    "Random steps before training. Fills replay buffer.",
+                    {"type": "number", "min": 0, "label": "Learning starts"},
                 ),
                 (
                     "train_every",
                     config.agent.train_every,
-                    "Train every N steps",
-                    {"type": "number", "min": 1},
+                    "Gradient update every N env steps.",
+                    {"type": "number", "min": 1, "label": "Train every"},
                 ),
                 (
                     "target_update_interval",
                     config.agent.target_update_interval,
-                    "Target sync interval",
-                    {"type": "number", "min": 1},
+                    "Steps between target network updates.",
+                    {"type": "number", "min": 1, "label": "Target update"},
+                ),
+                (
+                    "optimizer.lr",
+                    config.agent.optimizer.lr,
+                    "Policy optimizer learning rate.",
+                    {"type": "number", "min": 0, "step": 0.00001, "label": "LR"},
                 ),
             ],
         },
         {
             "title": "exploration",
+            "group_label": "Exploration",
             "fields": [
                 (
                     "epsilon_start",
                     config.exploration.epsilon_start,
-                    "Initial epsilon",
-                    {"type": "number", "min": 0, "max": 1, "step": 0.01},
+                    "Starting exploration rate. 1.0 = fully random.",
+                    {"type": "number", "min": 0, "max": 1, "step": 0.01,
+                     "label": "Epsilon start"},
                 ),
                 (
                     "epsilon_end",
                     config.exploration.epsilon_end,
-                    "Final epsilon",
-                    {"type": "number", "min": 0, "max": 1, "step": 0.01},
+                    "Minimum exploration rate after decay.",
+                    {"type": "number", "min": 0, "max": 1, "step": 0.01,
+                     "label": "Epsilon end"},
                 ),
                 (
                     "epsilon_decay_steps",
                     config.exploration.epsilon_decay_steps,
-                    "Decay steps",
-                    {"type": "number", "min": 1},
+                    "Steps for epsilon linear decay.",
+                    {"type": "number", "min": 1, "label": "Decay steps"},
                 ),
             ],
         },
         {
             "title": "replay",
+            "group_label": "Replay",
             "fields": [
                 (
                     "capacity",
                     config.replay.capacity,
-                    "Buffer capacity",
-                    {"type": "number", "min": 100},
+                    "Max transitions stored. 100k-1M typical.",
+                    {"type": "number", "min": 100, "label": "Capacity"},
                 ),
-                ("prioritized", config.replay.prioritized, "Prioritized replay", {"type": "bool"}),
+                (
+                    "prioritized", config.replay.prioritized,
+                    "Sample proportional to TD error.",
+                    {"type": "bool", "label": "Prioritized"},
+                ),
                 (
                     "sequence_length",
                     config.replay.sequence_length,
-                    "Sequence length",
-                    {"type": "number", "min": 1},
+                    "Consecutive frames per batch (JEPA). 8-32 typical.",
+                    {"type": "number", "min": 1, "label": "Sequence length"},
                 ),
             ],
         },
         {
             "title": "world_model",
+            "group_label": "World Model",
             "fields": [
-                ("enabled", config.world_model.enabled, "Use JEPA world model", {"type": "bool"}),
+                (
+                    "enabled", config.world_model.enabled,
+                    "Enable JEPA pretraining. Required for frozen_jepa_dqn.",
+                    {"type": "bool", "label": "Enabled"},
+                ),
                 (
                     "latent_dim",
                     config.world_model.latent_dim,
-                    "Latent dim",
-                    {"type": "number", "min": 1},
+                    "Latent embedding dimension. 128-512 typical.",
+                    {"type": "number", "min": 1, "label": "Latent dim"},
                 ),
-                ("encoder", config.world_model.encoder.type, "Encoder", {"type": "readonly"}),
-                ("predictor", config.world_model.predictor.type, "Predictor", {"type": "readonly"}),
+                (
+                    "encoder", config.world_model.encoder.type,
+                    "Vision encoder architecture.",
+                    {"type": "readonly", "label": "Encoder"},
+                ),
+                (
+                    "predictor", config.world_model.predictor.type,
+                    "Predictor architecture.",
+                    {"type": "readonly", "label": "Predictor"},
+                ),
                 (
                     "horizons",
                     list(config.world_model.predictor.horizons),
-                    "Horizons",
-                    {"type": "readonly"},
+                    "Future steps the predictor is trained to forecast.",
+                    {"type": "readonly", "label": "Horizons"},
                 ),
-                ("loss", config.world_model.loss.prediction, "Loss function", {"type": "readonly"}),
+                (
+                    "loss", config.world_model.loss.prediction,
+                    "Objective used to train the world model.",
+                    {"type": "readonly", "label": "Loss"},
+                ),
                 (
                     "ema_tau",
-                    f"{config.world_model.target_encoder.ema_tau_start}–{config.world_model.target_encoder.ema_tau_end}",
-                    "EMA tau schedule",
-                    {"type": "readonly"},
+                    f"{config.world_model.target_encoder.ema_tau_start}"
+                    f"–{config.world_model.target_encoder.ema_tau_end}",
+                    "EMA decay for the target encoder.",
+                    {"type": "readonly", "label": "EMA tau"},
+                ),
+            ],
+        },
+        {
+            "title": "training",
+            "group_label": "Training",
+            "fields": [
+                (
+                    "total_env_steps", config.training.total_env_steps,
+                    "Total environment steps to train for.",
+                    {"type": "number", "min": 1, "label": "Total steps"},
+                ),
+                (
+                    "learning_starts", config.training.learning_starts,
+                    "Random exploration before learning begins.",
+                    {"type": "number", "min": 0,
+                     "label": "Learning starts"},
+                ),
+                (
+                    "train_every", config.training.train_every,
+                    "Gradient update every N env steps.",
+                    {"type": "number", "min": 1, "label": "Train every"},
+                ),
+                (
+                    "eval_interval_steps",
+                    config.training.eval_interval_steps,
+                    "Run evaluation every N steps.",
+                    {"type": "number", "min": 100,
+                     "label": "Eval interval"},
+                ),
+                (
+                    "checkpoint_interval_steps",
+                    config.training.checkpoint_interval_steps,
+                    "Save a checkpoint every N steps.",
+                    {"type": "number", "min": 100,
+                     "label": "Checkpoint interval"},
                 ),
             ],
         },
@@ -1460,6 +1972,15 @@ def _build_model_info(config: ProjectConfig) -> dict[str, Any]:
         "predictor_hidden": config.world_model.predictor.hidden_dim,
         "q_hidden_dims": list(config.agent.q_network.hidden_dims),
         "q_dueling": config.agent.q_network.dueling,
+        "gamma": config.agent.gamma,
+        "batch_size": config.agent.batch_size,
+        "learning_starts": config.agent.learning_starts,
+        "train_every": config.agent.train_every,
+        "target_update_interval": config.agent.target_update_interval,
+        "agent_lr": config.agent.optimizer.lr,
+        "epsilon_start": config.exploration.epsilon_start,
+        "epsilon_end": config.exploration.epsilon_end,
+        "epsilon_decay_steps": config.exploration.epsilon_decay_steps,
         "num_actions": config.actions.num_actions,
         "action_keys": list(config.actions.keys),
     }
@@ -1469,16 +1990,40 @@ def list_collected_datasets(state: UiState) -> dict[str, Any]:
     output_dir = Path(state.config.experiment.output_dir)
     datasets: list[dict[str, Any]] = []
     if output_dir.is_dir():
-        for child in sorted(output_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        for child in sorted(
+            output_dir.iterdir(),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        ):
             summary_path = child / "random_baseline_summary.json"
             if child.is_dir() and summary_path.exists():
                 summary = _read_json(summary_path)
+                events_path = child / "metrics" / "random_events.jsonl"
+                total_steps = 0
+                if events_path.exists():
+                    with contextlib.suppress(Exception):
+                        total_steps = sum(
+                            1
+                            for _ in events_path.open(encoding="utf-8")
+                        )
+                dir_size = 0
+                try:
+                    for f in child.rglob("*"):
+                        if f.is_file():
+                            dir_size += f.stat().st_size
+                except Exception:  # noqa: BLE001
+                    pass
                 datasets.append(
                     {
                         "name": child.name,
                         "episodes": summary.get("total_episodes", 0),
                         "mean_score": summary.get("score_mean"),
                         "max_score": summary.get("score_max"),
+                        "min_score": summary.get("score_min"),
+                        "median_score": summary.get("score_median"),
+                        "mean_length": summary.get("mean_episode_length"),
+                        "total_steps": total_steps,
+                        "size_bytes": dir_size,
                     }
                 )
     return {"datasets": datasets}
@@ -1491,10 +2036,16 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
         world_job = state.world_job
         collect_job = state.collect_job
         run_dir = job.run_dir if job is not None else state.run_dir
+        base_config = state.config
     summary = _read_json(run_dir / "metrics" / "train_summary.json")
     events = _read_jsonl(run_dir / "metrics" / "train_events.jsonl")
     step_events = [event for event in events if event.get("type") == "step"]
     episode_events = [event for event in events if event.get("type") == "episode"]
+    active_config = base_config
+    snapshot = run_dir / "config.yaml"
+    if snapshot.exists():
+        with contextlib.suppress(Exception):
+            active_config = load_config(snapshot)
     with state.lock:
         live_step_events = list(state.live_step_events)
         job_payload = None
@@ -1538,13 +2089,14 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
             collect_job_payload = {
                 "status": collect_job.status,
                 "run_name": collect_job.run_name,
+                "run_dir": str(collect_job.run_dir),
                 "episodes_done": collect_job.episodes_done,
                 "episodes_target": collect_job.episodes_target,
                 "mean_score": collect_job.mean_score,
                 "error": collect_job.error,
                 "started_at": collect_job.started_at,
                 "completed_at": collect_job.completed_at,
-                "running": collect_job.thread.is_alive(),
+                "running": collect_job.status == "running",
             }
 
     if live_step_events:
@@ -1566,31 +2118,27 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
                 (run_dir / "checkpoints" / "latest.pt").exists()
                 or (run_dir / "checkpoints" / "latest.npz").exists()
             ),
-            "checkpoints": _list_checkpoints(run_dir, algorithm=state.config.agent.algorithm),
+            "checkpoints": _list_checkpoints(run_dir, algorithm=active_config.agent.algorithm),
         },
         "config": {
             "path": str(state.config_path),
-            "game": state.config.game.name,
-            "reset_key": state.config.game.reset_key,
-            "action_keys": list(state.config.actions.keys),
-            "actions": state.config.actions.num_actions,
+            "game": active_config.game.name,
+            "reset_key": active_config.game.reset_key,
+            "action_keys": list(active_config.actions.keys),
+            "actions": active_config.actions.num_actions,
             "observation": {
-                "width": state.config.observation.width,
-                "height": state.config.observation.height,
-                "channels": state.config.observation.input_channels,
+                "width": active_config.observation.width,
+                "height": active_config.observation.height,
+                "channels": active_config.observation.input_channels,
             },
         },
         "game_settings": [
-            ("resolution", f"{state.config.observation.width}x{state.config.observation.height}"),
-            ("fps", state.config.game.fps),
-            ("action repeat", state.config.game.action_repeat),
-            ("obs mode", state.config.observation.mode),
-            ("frame stack", state.config.observation.frame_stack),
-            ("actions", ", ".join(state.config.actions.keys)),
-            ("max steps", state.config.game.max_steps_per_episode),
-            ("description", _game_description(state.config.game.name)),
+            ("controls", ", ".join(active_config.actions.keys)),
+            ("reset", active_config.game.reset_key or "reload"),
+            ("description", _game_description(active_config.game.name)),
         ],
-        "config_detail": _build_config_detail(state.config),
+        "base_config_detail": _build_config_detail(base_config),
+        "config_detail": _build_config_detail(active_config),
         "job": job_payload,
         "eval": eval_payload,
         "world_job": world_job_payload,
@@ -1599,7 +2147,8 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
         "latest_step": latest_step,
         "steps": step_events[-500:],
         "episodes": episode_events[-100:],
-        "model_info": _build_model_info(state.config),
+        "base_model_info": _build_model_info(base_config),
+        "model_info": _build_model_info(active_config),
     }
     return payload
 
