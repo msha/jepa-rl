@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRunsStore } from '../stores/runs'
+import VDropdown from './VDropdown.vue'
 
 const runs = useRunsStore()
 const showNewModal = ref(false)
@@ -61,14 +62,22 @@ function runLabel(r: { name: string; algorithm?: string; best_score?: number; st
   if (r.steps != null) parts.push(r.steps + ' steps')
   return parts.join(' · ')
 }
+
+const runOptions = computed(() => [
+  { value: '', label: 'select run...' },
+  ...runs.runs.map(r => ({ value: r.name, label: runLabel(r) }))
+])
 </script>
 
 <template>
   <div class="run-select">
-    <select v-model="runs.selectedRun" @change="onChange" title="Select a past training run to view its details">
-      <option value="">select run...</option>
-      <option v-for="r in runs.runs" :key="r.name" :value="r.name">{{ runLabel(r) }}</option>
-    </select>
+    <VDropdown
+      v-model="runs.selectedRun"
+      :options="runOptions"
+      @change="onChange"
+      title="Select a past training run to view its details"
+      full-width
+    />
     <div class="run-select-actions">
       <button @click="openNewModal" class="btn-tiny" title="Start a new training run">+ new run</button>
       <label class="smoke-toggle">

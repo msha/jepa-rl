@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useTrainingStore } from '../stores/training'
 import { useConfigStore } from '../stores/config'
 import { useRunsStore } from '../stores/runs'
+import VDropdown from './VDropdown.vue'
 
 const training = useTrainingStore()
 const config = useConfigStore()
@@ -34,6 +35,11 @@ async function applyOverride(group: string, key: string, value: string) {
 const editingField = ref<{ group: string, key: string, val: unknown, type: string, opts?: string[] } | null>(null)
 const editValue = ref<string>('')
 const editPopoverStyle = ref<Record<string, string>>({})
+
+const selectFieldOptions = computed(() => {
+  if (!editingField.value?.opts) return []
+  return editingField.value.opts.map(o => ({ value: String(o), label: String(o) }))
+})
 
 function openEdit(group: string, f: any[], event: MouseEvent) {
   if (f[3]?.type === 'readonly') return
@@ -103,9 +109,13 @@ function onCheckboxChange(e: Event, group: string, key: string) {
     <div v-if="editingField" class="popover" :style="editPopoverStyle">
       <div class="popover-label">{{ editingField.key }}</div>
 
-      <select v-if="editingField.type === 'select'" v-model="editValue" class="popover-input" @keyup.enter="saveEdit" autofocus>
-        <option v-for="o in editingField.opts" :key="o" :value="String(o)">{{ o }}</option>
-      </select>
+      <VDropdown
+        v-if="editingField.type === 'select'"
+        v-model="editValue"
+        :options="selectFieldOptions"
+        @change="saveEdit"
+        full-width
+      />
 
       <input v-else
              v-model="editValue"

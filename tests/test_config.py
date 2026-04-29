@@ -12,13 +12,18 @@ def test_load_breakout_config_merges_base_and_small_preset() -> None:
 
     assert config.experiment.name == "breakout_jepa_dqn_small"
     assert config.game.name == "breakout"
+    assert config.game.reset_key == "Space"
+    assert config.game.reset_button_selector is None
+    assert config.game.reset_javascript is None
     assert config.observation.width == 160
     assert config.observation.height == 120
     assert config.observation.input_channels == 12
+    assert config.observation.dom_selectors == {"score": "#score", "lives": "#lives"}
     assert config.actions.num_actions == 6
     assert config.world_model.latent_dim == 512
     assert config.agent.algorithm == "dqn"
     assert config.replay.sequence_length == 16
+    assert config.training.eval_budgets == (100_000, 500_000, 1_000_000, 5_000_000)
     assert config.reward.zero_score_patience_steps == 120
     assert config.reward.zero_score_penalty == 0.01
 
@@ -113,3 +118,44 @@ def test_reward_zero_score_penalty_must_be_nonnegative() -> None:
             "score_selector": "#score",
             "zero_score_penalty": -0.01,
         })
+
+
+def test_dom_assisted_observation_requires_dom_selectors(tmp_path) -> None:
+    config_file = tmp_path / "invalid_dom_assisted.yaml"
+    base_config = Path("configs/base.yaml").resolve()
+    config_file.write_text(
+        "\n".join(
+            [
+                "extends:",
+                f"  - {base_config}",
+                "observation:",
+                "  mode: dom_assisted",
+                "  dom_selectors: null",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="dom_selectors"):
+        load_config(config_file)
+
+
+def test_javascript_reset_requires_privileged_flag(tmp_path) -> None:
+    config_file = tmp_path / "invalid_js_reset.yaml"
+    base_config = Path("configs/base.yaml").resolve()
+    config_file.write_text(
+        "\n".join(
+            [
+                "extends:",
+                f"  - {base_config}",
+                "game:",
+                "  reset_javascript: window.resetGame()",
+                "reward:",
+                "  privileged: false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="javascript reset"):
+        load_config(config_file)

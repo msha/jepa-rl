@@ -175,6 +175,8 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(list_runs(state, include_smoke="true" in qs.get("smoke", [])))
             elif parsed.path == "/api/configs":
                 self._send_json(list_configs())
+            elif parsed.path == "/api/collected-datasets":
+                self._send_json(list_collected_datasets(state))
             elif parsed.path == "/api/defaults":
                 self._send_json(_get_defaults(state))
             elif parsed.path.startswith("/api/run-detail"):
@@ -1442,6 +1444,46 @@ def _get_defaults(state: UiState) -> dict[str, Any]:
     }
 
 
+def _build_model_info(config: ProjectConfig) -> dict[str, Any]:
+    return {
+        "algorithm": config.agent.algorithm,
+        "observation_width": config.observation.width,
+        "observation_height": config.observation.height,
+        "grayscale": config.observation.grayscale,
+        "frame_stack": config.observation.frame_stack,
+        "latent_dim": config.world_model.latent_dim,
+        "encoder_type": config.world_model.encoder.type,
+        "encoder_channels": list(config.world_model.encoder.hidden_channels),
+        "predictor_type": config.world_model.predictor.type,
+        "predictor_depth": config.world_model.predictor.depth,
+        "predictor_heads": config.world_model.predictor.num_heads,
+        "predictor_hidden": config.world_model.predictor.hidden_dim,
+        "q_hidden_dims": list(config.agent.q_network.hidden_dims),
+        "q_dueling": config.agent.q_network.dueling,
+        "num_actions": config.actions.num_actions,
+        "action_keys": list(config.actions.keys),
+    }
+
+
+def list_collected_datasets(state: UiState) -> dict[str, Any]:
+    output_dir = Path(state.config.experiment.output_dir)
+    datasets: list[dict[str, Any]] = []
+    if output_dir.is_dir():
+        for child in sorted(output_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            summary_path = child / "random_baseline_summary.json"
+            if child.is_dir() and summary_path.exists():
+                summary = _read_json(summary_path)
+                datasets.append(
+                    {
+                        "name": child.name,
+                        "episodes": summary.get("total_episodes", 0),
+                        "mean_score": summary.get("score_mean"),
+                        "max_score": summary.get("score_max"),
+                    }
+                )
+    return {"datasets": datasets}
+
+
 def build_state_payload(state: UiState) -> dict[str, Any]:
     with state.lock:
         job = state.job
@@ -1557,6 +1599,7 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
         "latest_step": latest_step,
         "steps": step_events[-500:],
         "episodes": episode_events[-100:],
+        "model_info": _build_model_info(state.config),
     }
     return payload
 

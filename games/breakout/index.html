@@ -316,8 +316,14 @@
       }
 
       window.addEventListener("keydown", (event) => {
-        keys.add(event.key);
-        if (event.key === " ") {
+        const k = event.key;
+        const mapped = k === 'w' || k === 'W' ? 'ArrowUp'
+                     : k === 'a' || k === 'A' ? 'ArrowLeft'
+                     : k === 's' || k === 'S' ? 'ArrowDown'
+                     : k === 'd' || k === 'D' ? 'ArrowRight'
+                     : k;
+        keys.add(mapped);
+        if (mapped === " ") {
           event.preventDefault();
           if (waiting && !done) {
             waiting = false;
@@ -327,16 +333,22 @@
             launchBall();
           }
         }
-        if ((event.key === "r") && done) {
+        if ((mapped === "r") && done) {
           resetGame();
         }
-        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        if (mapped === "ArrowLeft" || mapped === "ArrowRight") {
           event.preventDefault();
         }
       });
 
       window.addEventListener("keyup", (event) => {
-        keys.delete(event.key);
+        const k = event.key;
+        const mapped = k === 'w' || k === 'W' ? 'ArrowUp'
+                     : k === 'a' || k === 'A' ? 'ArrowLeft'
+                     : k === 's' || k === 'S' ? 'ArrowDown'
+                     : k === 'd' || k === 'D' ? 'ArrowRight'
+                     : k;
+        keys.delete(mapped);
       });
 
       function rectHitCircle(rect, circle) {

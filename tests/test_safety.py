@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -184,9 +185,36 @@ class TestNoPrivilegedWithoutFlag:
         assert metadata_path.exists()
 
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        assert metadata["privileged"] is True
         assert metadata["privileged_score_reader"] is True
+        assert metadata["privileged_reset_callback"] is False
         assert metadata["game"] == config.game.name
         assert "timestamp" in metadata
+
+    @patch(_PW_PATCH_TARGET)
+    def test_run_metadata_records_privileged_reset_callback(self, mock_sync_pw, tmp_path):
+        _, mock_pw, *_ = _make_mock_playwright_chain()
+        mock_sync_pw.return_value.start.return_value = mock_pw
+
+        from jepa_rl.browser.playwright_env import PlaywrightBrowserGameEnv
+
+        config = _load_breakout_config()
+        config = replace(
+            config,
+            game=replace(
+                config.game,
+                reset_key=None,
+                reset_javascript="window.resetGame()",
+            ),
+            reward=replace(config.reward, privileged=True),
+        )
+
+        run_dir = tmp_path / "run"
+        env = PlaywrightBrowserGameEnv(config, headless=True, run_dir=run_dir)
+        env.start()
+
+        metadata = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
+        assert metadata["privileged_reset_callback"] is True
 
     @patch(_PW_PATCH_TARGET)
     def test_run_metadata_not_written_without_run_dir(self, mock_sync_pw, tmp_path):
@@ -221,6 +249,27 @@ class TestConfigSafetyDefaults:
                 "score_selector": "#score",
                 "privileged": False,
             })
+
+    def test_javascript_reset_requires_privileged(self, tmp_path):
+        from jepa_rl.utils.config import ConfigError
+
+        config_file = tmp_path / "invalid_reset.yaml"
+        config_file.write_text(
+            "\n".join(
+                [
+                    "extends:",
+                    f"  - {Path('configs/base.yaml').resolve()}",
+                    "game:",
+                    "  reset_javascript: window.resetGame()",
+                    "reward:",
+                    "  privileged: false",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ConfigError, match="javascript reset"):
+            load_config(config_file)
 
     def test_privileged_default_in_reward_config(self):
         from jepa_rl.utils.config import RewardConfig

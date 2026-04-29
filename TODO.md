@@ -96,7 +96,7 @@ References: design_doc §6 (Environment Interface), §15 (Browser Automation).
 - [x] P0 Set fixed viewport from config.
 - [x] P0 Implement screenshot observation mode.
 - [x] P1 Implement canvas capture observation mode.
-- [ ] P1 Implement DOM-assisted observation mode (screenshot + DOM-extracted score/lives/timer).
+- [x] P1 Implement DOM-assisted observation mode (screenshot + DOM-extracted score/lives/timer).
 - [x] P0 Implement resize, grayscale, and frame stack wrappers.
 - [x] P0 Implement crop and normalization wrappers.
 - [x] P0 Implement discrete keyboard action space.
@@ -105,11 +105,11 @@ References: design_doc §6 (Environment Interface), §15 (Browser Automation).
 - [x] P0 Implement action repeat.
 - [x] P0 Implement max steps per episode.
 - [x] P0 Implement reset by page reload.
-- [ ] P1 Implement reset by configured key or button.
-- [ ] P1 Implement reset by optional JavaScript callback (mark privileged).
-- [ ] P1 Implement full browser context restart fallback.
+- [x] P1 Implement reset by configured key or button.
+- [x] P1 Implement reset by optional JavaScript callback (mark privileged).
+- [x] P1 Implement full browser context restart fallback.
 - [x] P0 Implement DOM score reader.
-- [ ] P1 Implement OCR score reader fallback.
+- [x] P1 Implement OCR score reader fallback.
 - [ ] P1 Implement visual template score reader for digit sprites or lives icons.
 - [x] P0 Implement terminal detection by max steps and configured done selector.
 - [ ] P1 Implement visual terminal detection hook.
@@ -252,13 +252,13 @@ Definition of done:
 
 References: design_doc §9 (Training Strategy), §13.2 (Baselines).
 
-- [ ] P1 Implement frozen encoder feature extraction.
-- [ ] P1 Implement latent replay path or on-the-fly latent encoding path.
-- [ ] P1 Train DQN head on frozen JEPA latents.
-- [ ] P1 Compare frozen random-data JEPA + DQN against pixel DQN.
-- [ ] P1 Compare frozen passive-video JEPA + DQN against pixel DQN once Phase 13 exists.
-- [ ] P1 Track sample efficiency at fixed step budgets (100k, 500k, 1M, 5M).
-- [ ] P1 Add transfer test with frozen encoder and new policy head after a second game exists.
+- [x] P1 Implement frozen encoder feature extraction.
+- [x] P1 Implement latent replay path or on-the-fly latent encoding path.
+- [x] P1 Train DQN head on frozen JEPA latents.
+- [x] P1 Compare frozen random-data JEPA + DQN against pixel DQN.
+- [x] P1 Compare frozen passive-video JEPA + DQN against pixel DQN once Phase 13 exists.
+- [x] P1 Track sample efficiency at fixed step budgets (100k, 500k, 1M, 5M).
+- [x] P1 Add transfer test with frozen encoder and new policy head after a second game exists.
 
 Definition of done:
 
@@ -374,8 +374,8 @@ References: design_doc §15.2, §18.
 - [x] P0 Make viewport deterministic.
 - [x] P0 Do not mutate game source, score, memory, local storage, or network requests for advantage.
 - [ ] P1 Add optional network allowlist.
-- [ ] P1 Mark JavaScript score/reset callbacks as privileged in config and logs.
-- [ ] P1 Save explicit run metadata when privileged callbacks are enabled.
+- [x] P1 Mark JavaScript score/reset callbacks as privileged in config and logs.
+- [x] P1 Save explicit run metadata when privileged callbacks are enabled.
 - [ ] P1 Add documentation for acceptable game adapter behavior.
 
 Definition of done:

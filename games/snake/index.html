@@ -285,19 +285,25 @@
       }
 
       window.addEventListener("keydown", (event) => {
-        if (event.key === " ") {
+        const k = event.key;
+        const mapped = k === 'w' || k === 'W' ? 'ArrowUp'
+                     : k === 'a' || k === 'A' ? 'ArrowLeft'
+                     : k === 's' || k === 'S' ? 'ArrowDown'
+                     : k === 'd' || k === 'D' ? 'ArrowRight'
+                     : k;
+        if (mapped === " ") {
           event.preventDefault();
           if (waiting && !done) {
             waiting = false;
             lastMove = performance.now();
           }
         }
-        if (event.key === "r" && done) {
+        if (mapped === "r" && done) {
           resetGame();
         }
         if (done || waiting) return;
 
-        switch (event.key) {
+        switch (mapped) {
           case "ArrowUp":
             if (direction.y !== 1) nextDirection = { x: 0, y: -1 };
             event.preventDefault();

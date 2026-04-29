@@ -25,6 +25,13 @@ interface RunDetail {
   run_dir: string
 }
 
+interface CollectedDataset {
+  name: string
+  episodes: number
+  mean_score: number | null
+  max_score: number | null
+}
+
 export const useRunsStore = defineStore('runs', () => {
   const runs = ref<Run[]>([])
   const selectedRun = ref('')
@@ -32,6 +39,7 @@ export const useRunsStore = defineStore('runs', () => {
   const runDir = ref('')
   const runConfigDetail = ref<ConfigGroup[] | null>(null)
   const showSmoke = ref(false)
+  const collectedDatasets = ref<CollectedDataset[]>([])
 
   async function loadRuns() {
     try {
@@ -61,6 +69,13 @@ export const useRunsStore = defineStore('runs', () => {
     } catch { /* swallow */ }
   }
 
+  async function loadCollectedDatasets() {
+    try {
+      const data = await getJson<{ datasets: CollectedDataset[] }>('/api/collected-datasets')
+      collectedDatasets.value = data.datasets || []
+    } catch { /* swallow */ }
+  }
+
   async function deleteRun(name: string) {
     await api('/api/delete-run', { name })
     if (selectedRun.value === name) {
@@ -70,7 +85,8 @@ export const useRunsStore = defineStore('runs', () => {
       runConfigDetail.value = null
     }
     await loadRuns()
+    await loadCollectedDatasets()
   }
 
-  return { runs, selectedRun, checkpoints, runDir, runConfigDetail, showSmoke, loadRuns, loadRunDetail, deleteRun }
+  return { runs, selectedRun, checkpoints, runDir, runConfigDetail, showSmoke, collectedDatasets, loadRuns, loadRunDetail, loadCollectedDatasets, deleteRun }
 })

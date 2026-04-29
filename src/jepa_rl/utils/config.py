@@ -150,6 +150,8 @@ class GameConfig:
     reset_timeout_sec: float
     done_selector: str | None
     reset_key: str | None
+    reset_button_selector: str | None
+    reset_javascript: str | None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GameConfig:
@@ -163,6 +165,16 @@ class GameConfig:
         reset_key = data.get("reset_key")
         if reset_key is not None:
             reset_key = _str(reset_key, "game.reset_key")
+
+        reset_button_selector = data.get("reset_button_selector")
+        if reset_button_selector is not None:
+            reset_button_selector = _str(
+                reset_button_selector, "game.reset_button_selector"
+            )
+
+        reset_javascript = data.get("reset_javascript")
+        if reset_javascript is not None:
+            reset_javascript = _str(reset_javascript, "game.reset_javascript")
 
         return cls(
             name=_str(data.get("name"), "game.name"),
@@ -179,6 +191,8 @@ class GameConfig:
             ),
             done_selector=done_selector,
             reset_key=reset_key,
+            reset_button_selector=reset_button_selector,
+            reset_javascript=reset_javascript,
         )
 
 
@@ -189,6 +203,7 @@ class ObservationConfig:
     height: int
     grayscale: bool
     frame_stack: int
+    dom_selectors: dict[str, str]
     crop_top: int
     crop_bottom: int
     crop_left: int
@@ -208,12 +223,34 @@ class ObservationConfig:
                 "observation.mode must be screenshot, canvas, dom_assisted, or hybrid"
             )
 
+        dom_selectors_raw = data.get("dom_selectors", {})
+        if dom_selectors_raw is None:
+            dom_selectors_raw = {}
+        if (
+            not isinstance(dom_selectors_raw, dict)
+            or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in dom_selectors_raw.items()
+            )
+        ):
+            raise ConfigError("observation.dom_selectors must be a mapping of names to selectors")
+        dom_selectors = {
+            key: value
+            for key, value in dom_selectors_raw.items()
+            if key.strip() and value.strip()
+        }
+        if mode in {"dom_assisted", "hybrid"} and not dom_selectors:
+            raise ConfigError(
+                "observation.dom_selectors is required for dom_assisted or hybrid mode"
+            )
+
         return cls(
             mode=mode,
             width=_positive_int(data.get("width", 84), "observation.width"),
             height=_positive_int(data.get("height", 84), "observation.height"),
             grayscale=_bool(data.get("grayscale", False), "observation.grayscale"),
             frame_stack=_positive_int(data.get("frame_stack", 4), "observation.frame_stack"),
+            dom_selectors=dom_selectors,
             crop_top=_nonnegative_int(data.get("crop_top", 0), "observation.crop_top"),
             crop_bottom=_nonnegative_int(data.get("crop_bottom", 0), "observation.crop_bottom"),
             crop_left=_nonnegative_int(data.get("crop_left", 0), "observation.crop_left"),
@@ -698,6 +735,11 @@ class TrainingConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TrainingConfig:
+        eval_budgets_raw = data.get(
+            "eval_budgets", [100_000, 500_000, 1_000_000, 5_000_000]
+        )
+        if not isinstance(eval_budgets_raw, list) or not eval_budgets_raw:
+            raise ConfigError("training.eval_budgets must be a non-empty list of integers")
         return cls(
             passive_pretrain_steps=_nonnegative_int(
                 data.get("passive_pretrain_steps", 0), "training.passive_pretrain_steps"
@@ -728,8 +770,7 @@ class TrainingConfig:
                 data.get("planning_eval_only_until", 0), "training.planning_eval_only_until"
             ),
             eval_budgets=tuple(
-                _positive_int(v, "training.eval_budgets")
-                for v in data.get("eval_budgets", [100_000, 500_000, 1_000_000, 5_000_000])
+                _positive_int(v, "training.eval_budgets") for v in eval_budgets_raw
             ),
             freeze_encoder=_bool(data.get("freeze_encoder", False), "training.freeze_encoder"),
         )
@@ -821,6 +862,10 @@ class ProjectConfig:
             raise ConfigError("agent.learning_starts cannot exceed training.total_env_steps")
         if self.training.learning_starts > self.training.total_env_steps:
             raise ConfigError("training.learning_starts cannot exceed training.total_env_steps")
+        if self.game.reset_javascript is not None and not self.reward.privileged:
+            raise ConfigError(
+                "javascript reset callbacks must set reward.privileged: true"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return json.loads(json.dumps(dataclasses.asdict(self)))

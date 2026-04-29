@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import re
+import sys
+from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from PIL import Image
 
 from jepa_rl.browser.playwright_env import BrowserEnvError, PlaywrightBrowserGameEnv
 
@@ -150,3 +155,55 @@ def test_screenshot_failure_does_not_suppress_original_error(tmp_path):
 
     with pytest.raises(BrowserEnvError, match="Could not parse score"):
         env.read_score()
+
+
+def test_ocr_score_reader_uses_configured_score_region(tmp_path, monkeypatch):
+    env = _make_env_with_mock_page(tmp_path)
+    reward = replace(
+        env.config.reward,
+        score_reader="ocr",
+        score_selector=None,
+        score_region=(1, 2, 3, 4),
+    )
+    env.config = replace(env.config, reward=reward)
+
+    png = BytesIO()
+    Image.new("RGB", (10, 10), color=(255, 255, 255)).save(png, format="PNG")
+    env._page.screenshot.side_effect = None
+    env._page.screenshot.return_value = png.getvalue()
+
+    seen_sizes: list[tuple[int, int]] = []
+
+    def _fake_ocr(image):
+        seen_sizes.append(image.size)
+        return "Score 123"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pytesseract",
+        SimpleNamespace(image_to_string=_fake_ocr),
+    )
+
+    assert env.read_score() == 123.0
+    assert seen_sizes == [(3, 4)]
+
+
+def test_canvas_ocr_score_reader_captures_canvas(tmp_path, monkeypatch):
+    env = _make_env_with_mock_page(tmp_path)
+    reward = replace(env.config.reward, score_reader="canvas_ocr", score_selector=None)
+    env.config = replace(env.config, reward=reward)
+
+    png = BytesIO()
+    Image.new("RGB", (6, 6), color=(255, 255, 255)).save(png, format="PNG")
+    canvas_locator = MagicMock()
+    canvas_locator.first.screenshot.return_value = png.getvalue()
+    env._page.locator.return_value = canvas_locator
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pytesseract",
+        SimpleNamespace(image_to_string=lambda image: "77"),
+    )
+
+    assert env.read_score() == 77.0
+    canvas_locator.first.screenshot.assert_called_once()

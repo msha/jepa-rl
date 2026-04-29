@@ -7,6 +7,7 @@ import torch
 from torch import nn
 
 from jepa_rl.models.encoders import ConvEncoder
+from jepa_rl.models.frozen_encoder import load_frozen_encoder
 from jepa_rl.utils.config import ProjectConfig
 
 
@@ -85,28 +86,10 @@ def build_frozen_jepa_q_network(
     jepa_checkpoint_path: Path,
 ) -> FrozenJepaQNetwork:
     """Build a FrozenJepaQNetwork from a pretrained JEPA checkpoint."""
-    encoder = ConvEncoder(
-        input_channels=config.observation.input_channels,
-        hidden_channels=list(config.world_model.encoder.hidden_channels),
-        latent_dim=config.world_model.latent_dim,
-    )
-
-    state = torch.load(jepa_checkpoint_path, map_location="cpu", weights_only=False)
-    model_sd = state.get("model", state)
-    encoder_sd = {
-        k.removeprefix("encoder."): v
-        for k, v in model_sd.items()
-        if k.startswith("encoder.")
-    }
-    if not encoder_sd:
-        raise ValueError(
-            f"No encoder weights found in {jepa_checkpoint_path}. "
-            "Expected keys like 'encoder.xxx'."
-        )
-    encoder.load_state_dict(encoder_sd)
+    frozen_encoder = load_frozen_encoder(config, jepa_checkpoint_path)
 
     return FrozenJepaQNetwork(
-        encoder=encoder,
+        encoder=frozen_encoder.encoder,
         latent_dim=config.world_model.latent_dim,
         num_actions=num_actions,
         hidden_dims=config.agent.q_network.hidden_dims,

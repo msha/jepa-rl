@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useConfigStore } from '../stores/config'
 import { useTrainingStore } from '../stores/training'
+import VDropdown from './VDropdown.vue'
 
 const config = useConfigStore()
 const training = useTrainingStore()
@@ -16,6 +17,10 @@ onMounted(async () => {
 })
 
 watch(() => config.currentPath, (p) => { selectedConfig.value = p })
+
+const configOptions = computed(() =>
+  config.configs.map(c => ({ value: c.path, label: c.name }))
+)
 
 async function onConfigChange() {
   if (!selectedConfig.value) return
@@ -43,9 +48,13 @@ async function onConfigChange() {
   <div class="controls-bar">
     <div class="field">
       config
-      <select v-model="selectedConfig" @change="onConfigChange" title="Switch active game config">
-        <option v-for="c in config.configs" :key="c.path" :value="c.path">{{ c.name }}</option>
-      </select>
+      <VDropdown
+        v-model="selectedConfig"
+        :options="configOptions"
+        @change="onConfigChange"
+        title="Switch active game config"
+        compact
+      />
     </div>
     <span v-if="validateStatus === 'ok'" class="cb-validate ok" :title="validateMsg">✓ {{ validateMsg }}</span>
     <span v-if="validateStatus === 'error'" class="cb-validate err" :title="validateMsg">✗ {{ validateMsg }}</span>

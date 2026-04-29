@@ -616,6 +616,9 @@ game:
   headless: true
   fps: 30
   action_repeat: 4
+  reset_key: Space
+  reset_button_selector: null
+  reset_javascript: null
 
 observation:
   mode: screenshot
@@ -623,6 +626,9 @@ observation:
   height: 120
   grayscale: false
   frame_stack: 4
+  dom_selectors:
+    score: "#score"
+    lives: "#lives"
   crop: null
   normalize: true
 

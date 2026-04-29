@@ -50,6 +50,8 @@ export const useTrainingStore = defineStore('training', () => {
   const runDir = ref<{ name: string; dir: string; has_checkpoint: boolean; checkpoints: { file: string; label: string }[] } | null>(null)
   const resetKey = ref('Space')
   const actionKeys = ref<string[]>([])
+  const modelInfo = ref<Record<string, unknown>>({})
+  const gameName = ref('')
 
   const isTraining = computed(() => !!job.value?.running || job.value?.status === 'running' || job.value?.status === 'starting')
   const isEvaluating = computed(() => !isTraining.value && (!!evalJob.value?.running || evalJob.value?.status === 'running'))
@@ -85,9 +87,11 @@ export const useTrainingStore = defineStore('training', () => {
       gameSettings.value = (data.game_settings as [string, unknown][]) || []
       configDetail.value = (data.config_detail as ConfigGroup[]) || []
       runDir.value = data.run as { name: string; dir: string; has_checkpoint: boolean; checkpoints: { file: string; label: string }[] } | null
-      const cfg = data.config as { reset_key?: string; action_keys?: string[] } | undefined
+      const cfg = data.config as { reset_key?: string; action_keys?: string[]; game?: string } | undefined
       resetKey.value = cfg?.reset_key || 'Space'
       actionKeys.value = cfg?.action_keys || []
+      gameName.value = cfg?.game || ''
+      modelInfo.value = (data.model_info as Record<string, unknown>) || {}
     } catch { /* swallow */ }
   }
 
@@ -137,6 +141,7 @@ export const useTrainingStore = defineStore('training', () => {
     summary, latestStep, steps, episodes,
     job, evalJob, worldJob, collectJob, evalResult,
     gameSettings, configDetail, runDir, resetKey, actionKeys,
+    modelInfo, gameName,
     isTraining, isEvaluating, isWorldTraining, isCollecting, headerStatus,
     chartPoints, refresh, validateConfig, runMlSmoke,
     startCollect, stopCollect, startWorldTraining, stopWorldTraining,

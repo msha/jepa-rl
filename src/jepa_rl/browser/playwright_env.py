@@ -116,6 +116,16 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
                 "`uv run playwright install chromium` once, then retry."
             ) from exc
 
+        self._new_context_and_page()
+
+        if self._run_dir is not None and self.config.reward.privileged:
+            self._write_run_metadata(self._run_dir)
+
+        self.reset()
+
+    def _new_context_and_page(self) -> None:
+        if self._browser is None:
+            raise BrowserEnvError("Browser has not been launched.")
         self._context = self._browser.new_context(
             viewport={
                 "width": max(640, self.config.observation.width),
@@ -126,15 +136,21 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         )
         self._page = self._context.new_page()
 
-        if self._run_dir is not None and self.config.reward.privileged:
-            self._write_run_metadata(self._run_dir)
-
-        self.reset()
+    def _restart_context(self) -> None:
+        if self._context is not None:
+            with suppress(self._playwright_error):
+                self._context.close()
+        self._context = None
+        self._page = None
+        self._new_context_and_page()
 
     def _write_run_metadata(self, run_dir: Path) -> None:
         run_dir.mkdir(parents=True, exist_ok=True)
         metadata = {
+            "privileged": True,
             "privileged_score_reader": True,
+            "privileged_reset_callback": self.config.game.reset_javascript is not None,
+            "score_reader": self.config.reward.score_reader,
             "game": self.config.game.name,
             "timestamp": datetime.now(UTC).isoformat(),
         }
@@ -171,27 +187,32 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
             self._recorder.reset()
 
         game_url = resolve_game_url(self.config.game.url)
-        try:
-            page.goto(game_url, wait_until="load")
-            if self.config.reward.score_selector:
-                page.wait_for_selector(
-                    self.config.reward.score_selector,
-                    timeout=self.config.game.reset_timeout_sec * 1000,
+        for attempt in range(2):
+            page = self._require_page()
+            try:
+                page.goto(game_url, wait_until="load")
+                if self.config.reward.score_selector:
+                    page.wait_for_selector(
+                        self.config.reward.score_selector,
+                        timeout=self.config.game.reset_timeout_sec * 1000,
+                    )
+                break
+            except Exception as exc:
+                self._reset_failures += 1
+                logger.warning(
+                    "Reset failed for game URL %s (timeout=%.1fs, attempt=%d): %s",
+                    game_url,
+                    self.config.game.reset_timeout_sec,
+                    attempt + 1,
+                    exc,
                 )
-        except Exception as exc:
-            self._reset_failures += 1
-            logger.warning(
-                "Reset failed for game URL %s (timeout=%.1fs): %s",
-                game_url,
-                self.config.game.reset_timeout_sec,
-                exc,
-            )
-            raise
+                if attempt == 0:
+                    self._restart_context()
+                    continue
+                raise
+        page = self._require_page()
         self._focus_game()
-        # Press reset key (Space) to dismiss the waiting/start screen.
-        if self.config.game.reset_key:
-            page.keyboard.press(self.config.game.reset_key)
-            page.wait_for_timeout(100)
+        self._trigger_configured_reset()
         self._steps = 0
         self._last_score = self.read_score()
         self._zero_score_steps = 0
@@ -249,23 +270,57 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         return self._observation_from_stack()
 
     def read_score(self) -> float:
-        if self.config.reward.score_reader != "dom":
-            raise BrowserEnvError("Only DOM score reading is implemented in the first browser env.")
-        selector = self.config.reward.score_selector
-        if selector is None:
-            raise BrowserEnvError("DOM score reader requires reward.score_selector.")
         try:
-            text = self._require_page().locator(selector).inner_text(timeout=1000)
-            match = re.search(r"-?\d+(?:\.\d+)?", text)
-            if match is None:
-                raise BrowserEnvError(f"Could not parse score from {selector!r}: {text!r}")
-            return float(match.group(0))
+            if self.config.reward.score_reader == "dom":
+                return self._read_score_dom()
+            if self.config.reward.score_reader in {"ocr", "canvas_ocr"}:
+                return self._read_score_ocr(
+                    canvas=self.config.reward.score_reader == "canvas_ocr"
+                )
+            raise BrowserEnvError(
+                f"Score reader {self.config.reward.score_reader!r} is not implemented."
+            )
         except Exception as exc:
             self._score_failures += 1
             logger.warning("Score reading failed at step %d: %s", self._steps, exc)
             if self._run_dir is not None:
                 self._save_score_failure_screenshot()
             raise
+
+    def _read_score_dom(self) -> float:
+        selector = self.config.reward.score_selector
+        if selector is None:
+            raise BrowserEnvError("DOM score reader requires reward.score_selector.")
+        text = self._require_page().locator(selector).inner_text(timeout=1000)
+        return self._parse_score_text(text, source=selector)
+
+    def _read_score_ocr(self, *, canvas: bool) -> float:
+        try:
+            import pytesseract  # type: ignore[import-not-found]
+        except ModuleNotFoundError as exc:
+            raise BrowserEnvError(
+                "OCR score reading requires pytesseract. Install it and the tesseract "
+                "system binary, or use reward.score_reader: dom."
+            ) from exc
+
+        page = self._require_page()
+        png = (
+            page.locator("canvas").first.screenshot(timeout=1000)
+            if canvas
+            else page.screenshot(full_page=False)
+        )
+        image = Image.open(BytesIO(png)).convert("RGB")
+        if self.config.reward.score_region is not None:
+            x, y, width, height = self.config.reward.score_region
+            image = image.crop((x, y, x + width, y + height))
+        text = pytesseract.image_to_string(image)
+        return self._parse_score_text(text, source=self.config.reward.score_reader)
+
+    def _parse_score_text(self, text: str, *, source: str) -> float:
+        match = re.search(r"-?\d+(?:\.\d+)?", text)
+        if match is None:
+            raise BrowserEnvError(f"Could not parse score from {source!r}: {text!r}")
+        return float(match.group(0))
 
     @property
     def reset_failures(self) -> int:
@@ -336,6 +391,20 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         except self._playwright_timeout_error:
             page.mouse.click(10, 10)
 
+    def _trigger_configured_reset(self) -> None:
+        page = self._require_page()
+        if self.config.game.reset_javascript:
+            page.evaluate(self.config.game.reset_javascript)
+            page.wait_for_timeout(100)
+        if self.config.game.reset_button_selector:
+            page.locator(self.config.game.reset_button_selector).click(
+                timeout=self.config.game.reset_timeout_sec * 1000
+            )
+            page.wait_for_timeout(100)
+        if self.config.game.reset_key:
+            page.keyboard.press(self.config.game.reset_key)
+            page.wait_for_timeout(100)
+
     def _apply_action(self, action: KeyboardAction) -> None:
         page = self._require_page()
         wait_ms = int(1000 * self.config.game.action_repeat / self.config.game.fps)
@@ -395,12 +464,47 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
                 ) from exc
         return page.screenshot(full_page=False)
 
+    def _read_dom_observation_metadata(self) -> dict[str, dict[str, Any]]:
+        if self.config.observation.mode not in {"dom_assisted", "hybrid"}:
+            return {}
+
+        dom_values: dict[str, dict[str, Any]] = {}
+        for name, selector in self.config.observation.dom_selectors.items():
+            try:
+                text = self._require_page().locator(selector).inner_text(timeout=1000)
+                match = re.search(r"-?\d+(?:\.\d+)?", text)
+                dom_values[name] = {
+                    "selector": selector,
+                    "text": text,
+                    "value": float(match.group(0)) if match else None,
+                    "status": "ok",
+                }
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "DOM observation selector %s=%r failed at step %d: %s",
+                    name,
+                    selector,
+                    self._steps,
+                    exc,
+                )
+                dom_values[name] = {
+                    "selector": selector,
+                    "text": None,
+                    "value": None,
+                    "status": "failed",
+                }
+        return dom_values
+
     def _observation_from_stack(self) -> Observation:
         data = np.concatenate(tuple(self._frames), axis=0)
+        metadata: dict[str, Any] = {"score": self._last_score, "steps": self._steps}
+        dom_metadata = self._read_dom_observation_metadata()
+        if dom_metadata:
+            metadata["dom"] = dom_metadata
         return Observation(
             data=data,
             width=self.config.observation.width,
             height=self.config.observation.height,
             channels=data.shape[0],
-            metadata={"score": self._last_score, "steps": self._steps},
+            metadata=metadata,
         )

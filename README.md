@@ -6,7 +6,7 @@ The first target is a Breakout-like browser game benchmark. Version 1 is complet
 
 ## Status
 
-This repository now has an initial runnable browser-game scaffold: package metadata, a `jepa-rl` CLI, typed configuration loading and validation, starter configs, a local Breakout-like HTML game, Playwright browser control, screenshot/canvas observations, DOM score reading, discrete keyboard action parsing, an in-memory replay buffer, run artifact directory creation, a minimal NumPy pixel-Q smoke trainer, and unit tests.
+This repository now has a runnable browser-game scaffold: package metadata, a `jepa-rl` CLI, typed configuration loading and validation, starter configs, local browser games, Playwright browser control, screenshot/canvas/DOM-assisted observations, DOM score reading, discrete keyboard action parsing, replay buffers, run artifacts, a NumPy smoke trainer, PyTorch pixel DQN, JEPA world pretraining, frozen JEPA+DQN, joint JEPA+DQN, and tests.
 
 Implemented CLI commands:
 
@@ -17,10 +17,11 @@ Implemented CLI commands:
 - `jepa-rl dashboard --run runs/<experiment>`
 - `jepa-rl ui --config configs/games/breakout.yaml`
 - `jepa-rl collect-random --config configs/games/breakout.yaml --experiment <name>`
+- `jepa-rl train-world --config configs/games/breakout.yaml --experiment <name>`
 - `jepa-rl train --config configs/games/breakout.yaml --experiment <name>`
 - `jepa-rl eval --config configs/games/breakout.yaml --checkpoint <path>`
 
-The current `train` command is a deliberately small linear Q-learning smoke path over downsampled pixels. It proves that the browser, actions, rewards, metrics, and checkpoint path work. It is not the planned DQN/JEPA implementation yet. `train-world` remains a planned stub.
+The `train` command dispatches from `agent.algorithm`: `dqn`, `frozen_jepa_dqn`, `joint_jepa_dqn`, or `linear_q`. Frozen JEPA+DQN requires `--jepa-checkpoint`. Phase 7 sample-efficiency reports are produced with `uv run python scripts/compare_baselines.py`.
 
 The canonical specification lives in:
 
@@ -250,20 +251,32 @@ jepa-rl/
 
 ## Target CLI
 
-The CLI exists, but only config validation and run initialization are implemented so far. The intended full workflow is:
+The implemented workflow is:
 
 ```bash
 # Phase 1: Random data collection (also gives the random-policy baseline number)
 jepa-rl collect-random --config configs/games/breakout.yaml --experiment breakout_random_v1
 
-# Phase 2: Offline JEPA pretraining from collected replay
-jepa-rl train-world --config configs/games/breakout.yaml --replay runs/breakout_random_v1/replay
+# Phase 2: Offline JEPA pretraining from random browser replay
+jepa-rl train-world --config configs/games/breakout.yaml --experiment breakout_random_jepa_v1
 
-# Phase 3: Joint JEPA + DQN training
+# Phase 3: Frozen JEPA + DQN policy-head training
+# Use a config whose agent.algorithm is frozen_jepa_dqn.
+jepa-rl train --config configs/games/breakout_frozen_jepa.yaml --experiment breakout_frozen_jepa_v1 \
+  --jepa-checkpoint runs/breakout_random_jepa_v1/checkpoints/latest.pt
+
+# Phase 4: Joint JEPA + DQN training
 jepa-rl train --config configs/games/breakout.yaml --experiment breakout_jepa_dqn_v1
 
 # Evaluation with deterministic action selection
-jepa-rl eval --checkpoint runs/breakout_jepa_dqn_v1/latest.pt --episodes 50
+jepa-rl eval --config configs/games/breakout.yaml \
+  --checkpoint runs/breakout_jepa_dqn_v1/checkpoints/best.pt --episodes 50
+
+# Phase 7 sample-efficiency report
+uv run python scripts/compare_baselines.py \
+  --config configs/games/breakout.yaml \
+  --configs pixel_dqn,frozen_random_jepa_dqn \
+  --seeds 0,1,2
 
 # Config validation without launching the browser
 jepa-rl validate-config --config configs/games/breakout.yaml
@@ -304,6 +317,9 @@ game:
   fps: 30
   action_repeat: 4
   max_steps_per_episode: 10000
+  reset_key: Space
+  reset_button_selector: null
+  reset_javascript: null          # requires reward.privileged: true when set
 
 observation:
   mode: screenshot              # screenshot | canvas | dom_assisted | hybrid
@@ -311,6 +327,9 @@ observation:
   height: 120
   grayscale: false
   frame_stack: 4
+  dom_selectors:
+    score: "#score"
+    lives: "#lives"
   crop: null
   normalize: true
 
@@ -371,7 +390,7 @@ world_model:
     num_candidates: 64
 
 agent:
-  algorithm: dqn                # dqn | ppo (later)
+  algorithm: dqn                # dqn | frozen_jepa_dqn | joint_jepa_dqn | linear_q
   gamma: 0.997
   n_step: 5
   batch_size: 256
@@ -408,6 +427,7 @@ training:
   world_updates_per_env_step: 1
   policy_updates_per_env_step: 1
   eval_interval_steps: 50000
+  eval_budgets: [100000, 500000, 1000000, 5000000]
   checkpoint_interval_steps: 50000
 
 evaluation:

@@ -16,6 +16,8 @@ game:
   reset_timeout_sec: 10
   done_selector: "#status[data-state='done']"
   reset_key: Space
+  reset_button_selector: null
+  reset_javascript: null
 
 observation:
   mode: screenshot
@@ -23,6 +25,9 @@ observation:
   height: 120
   grayscale: false
   frame_stack: 4
+  dom_selectors:
+    score: "#score"
+    lives: "#lives"
   crop_top: 0
   crop_bottom: 0
   crop_left: 0
@@ -146,6 +151,11 @@ training:
   policy_updates_per_env_step: 1
   freeze_encoder: false
   eval_interval_steps: 50000
+  eval_budgets:
+    - 100000
+    - 500000
+    - 1000000
+    - 5000000
   checkpoint_interval_steps: 50000
   planning_start_step: 1000000
   planning_eval_only_until: 2000000

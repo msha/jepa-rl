@@ -57,6 +57,7 @@ class FrozenJepaDqnTrainSummary:
     target_update_count: int
     replay_size: int
     jepa_checkpoint: Path
+    weight_delta_norm: float
 
 
 def train_frozen_jepa_dqn(
@@ -344,6 +345,7 @@ def train_frozen_jepa_dqn(
                         weight_delta_norm=wdn,
                         best_score=best_score if best_score != float("-inf") else episode_score,
                         started_at=started_at,
+                        jepa_checkpoint=jepa_checkpoint,
                     )
                     write_training_dashboard(run_dir)
 
@@ -417,6 +419,7 @@ def train_frozen_jepa_dqn(
         weight_delta_norm=wdn,
         best_score=final_score,
         started_at=started_at,
+        jepa_checkpoint=jepa_checkpoint,
     )
     dashboard_path = write_training_dashboard(run_dir)
 
@@ -434,6 +437,7 @@ def train_frozen_jepa_dqn(
         target_update_count=target_update_count,
         replay_size=len(replay),
         jepa_checkpoint=jepa_checkpoint,
+        weight_delta_norm=wdn,
     )
 
 
@@ -558,6 +562,7 @@ def _update_summary(
     weight_delta_norm: float,
     best_score: float,
     started_at: float,
+    jepa_checkpoint: Path,
 ) -> None:
     summary = build_run_summary(
         algorithm=ALGORITHM,
@@ -574,5 +579,8 @@ def _update_summary(
         weight_delta_norm=weight_delta_norm,
         best_score=best_score,
         started_at=started_at,
+        jepa_checkpoint=str(jepa_checkpoint),
+        encoder_frozen=True,
+        latent_path="on_the_fly",
     )
     write_run_summary(path, summary)
