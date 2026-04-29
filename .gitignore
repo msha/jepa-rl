@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.playwright-mcp/
 .coverage
 htmlcov/
 build/
@@ -46,4 +47,3 @@ docs/*.pdf
 
 # Frontend
 ui/node_modules/
-
