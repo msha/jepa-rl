@@ -128,10 +128,25 @@
       let waiting = true;   // waiting for Space to start
       let lastMove = 0;
       let particles = [];
-      const DESCRIPTION = "Eat food to grow longer. Avoid walls and yourself!";
       const BOARD_KEY = "jeparl_snake";
 
+      function postScores(scores) {
+        try { window.parent.postMessage({ type: "jeparl-scores", game: BOARD_KEY, scores: scores || loadBoard() }, "*"); } catch {}
+      }
+
       function isAI() { return window.location.search.includes("embed"); }
+
+      function getPlayerLabel() {
+        const params = new URLSearchParams(window.location.search);
+        if (isAI()) {
+          const run = params.get("run_name") || "";
+          const ckpt = params.get("checkpoint") || "";
+          if (run && ckpt) return run + " · " + ckpt;
+          if (run) return run;
+          return "AI";
+        }
+        return params.get("player_name") || "HUMAN";
+      }
 
       function loadBoard() {
         try { return JSON.parse(localStorage.getItem(BOARD_KEY) || "[]"); }
@@ -141,38 +156,12 @@
       function saveToBoard(s) {
         if (s <= 0) return loadBoard();
         const scores = loadBoard();
-        scores.push({ score: s, player: isAI() ? "AI" : "HUMAN" });
+        scores.push({ score: s, player: getPlayerLabel(), type: isAI() ? "ai" : "human", date: new Date().toISOString() });
         scores.sort((a, b) => b.score - a.score);
         if (scores.length > 10) scores.length = 10;
         try { localStorage.setItem(BOARD_KEY, JSON.stringify(scores)); } catch {}
+        postScores(scores);
         return scores;
-      }
-
-      function drawBoard(cx, y) {
-        const scores = loadBoard().slice(0, 5);
-        ctx.font = "600 12px system-ui";
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#7a8499";
-        ctx.fillText("HIGH SCORES", cx, y);
-        if (scores.length === 0) {
-          ctx.font = "400 11px system-ui";
-          ctx.fillStyle = "#444";
-          ctx.fillText("No scores yet", cx, y + 18);
-          return;
-        }
-        ctx.font = "400 12px system-ui";
-        scores.forEach((e, i) => {
-          const ey = y + 20 + i * 17;
-          ctx.textAlign = "left";
-          ctx.fillStyle = "#555";
-          ctx.fillText(`${i + 1}.`, cx - 70, ey);
-          ctx.fillStyle = e.player === "AI" ? "#64a8ff" : "#27d6a0";
-          ctx.fillText(e.player, cx - 48, ey);
-          ctx.textAlign = "right";
-          ctx.fillStyle = "#c0c8d8";
-          ctx.fillText(String(e.score), cx + 75, ey);
-        });
-        ctx.textAlign = "center";
       }
 
       function interval() {
@@ -327,7 +316,14 @@
       });
 
       function update(now) {
-        if (done || waiting) return;
+        if (done) return;
+
+        // AI auto-start/resume — skip waiting screen in embed mode
+        if (waiting && isAI()) {
+          waiting = false;
+          lastMove = performance.now();
+        }
+        if (waiting) return;
 
         if (now - lastMove >= interval()) {
           moveSnake();
@@ -345,56 +341,48 @@
         }
       }
 
+      let tick = 0;
+
       function draw() {
+        tick++;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#07090d";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Subtle grid
-        ctx.strokeStyle = "rgba(45, 52, 66, 0.3)";
-        ctx.lineWidth = 0.5;
-        for (let x = 0; x <= canvas.width; x += CELL) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, canvas.height);
-          ctx.stroke();
-        }
-        for (let y = 0; y <= canvas.height; y += CELL) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(canvas.width, y);
-          ctx.stroke();
-        }
-
-        // Food
+        // Food — pulsing glow
         if (food) {
           const fx = food.x * CELL + CELL / 2;
           const fy = food.y * CELL + CELL / 2;
+          const pulse = 1 + 0.15 * Math.sin(tick * 0.08);
           ctx.save();
           ctx.shadowColor = "#27d6a0";
-          ctx.shadowBlur = 10;
+          ctx.shadowBlur = 14 * pulse;
           ctx.fillStyle = "#27d6a0";
           ctx.beginPath();
-          ctx.arc(fx, fy, CELL / 2 - 2, 0, Math.PI * 2);
+          ctx.arc(fx, fy, (CELL / 2 - 2) * pulse, 0, Math.PI * 2);
           ctx.fill();
           ctx.restore();
-          // bright core
-          ctx.fillStyle = "#6ff5c8";
+          ctx.fillStyle = "#a7f5d8";
           ctx.beginPath();
-          ctx.arc(fx, fy, CELL / 4 - 1, 0, Math.PI * 2);
+          ctx.arc(fx, fy, CELL / 4, 0, Math.PI * 2);
           ctx.fill();
         }
 
-        // Snake body
+        // Snake body — connected segments with gradient
         for (let i = snake.length - 1; i >= 0; i--) {
           const seg = snake[i];
-          const t = 1 - i / snake.length;
-          const r = Math.round(100 + 56 * t);
-          const g = Math.round(168 + 68 * t);
-          const b = Math.round(255);
-          ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+          const t = i / Math.max(1, snake.length - 1); // 0=head, 1=tail
           const pad = i === 0 ? 1 : 2;
-          const br = 4;
+
+          // Color gradient: bright head → dim tail
+          const alpha = 1 - t * 0.55;
+          const r = Math.round(68 + 80 * (1 - t));
+          const g = Math.round(160 + 60 * (1 - t));
+          const b = Math.round(255);
+          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+
+          // Rounded rect
+          const br = i === 0 ? 5 : 4;
           const sx = seg.x * CELL + pad;
           const sy = seg.y * CELL + pad;
           const sw = CELL - pad * 2;
@@ -411,28 +399,52 @@
           ctx.quadraticCurveTo(sx, sy, sx + br, sy);
           ctx.closePath();
           ctx.fill();
+
+          // Connect adjacent segments with a filled rect so there are no gaps
+          if (i > 0) {
+            const prev = snake[i - 1];
+            const dx = prev.x - seg.x;
+            const dy = prev.y - seg.y;
+            if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) {
+              ctx.fillRect(
+                Math.min(seg.x, prev.x) * CELL + pad,
+                Math.min(seg.y, prev.y) * CELL + pad,
+                (Math.abs(dx) + 1) * CELL - pad * 2,
+                (Math.abs(dy) + 1) * CELL - pad * 2,
+              );
+            }
+          }
         }
 
-        // Head eyes
+        // Head glow + eyes
         if (snake.length > 0) {
           const h = snake[0];
           const hx = h.x * CELL + CELL / 2;
           const hy = h.y * CELL + CELL / 2;
+          ctx.save();
+          ctx.shadowColor = "#64a8ff";
+          ctx.shadowBlur = 8;
+          ctx.fillStyle = "rgba(100, 168, 255, 0.25)";
+          ctx.beginPath();
+          ctx.arc(hx, hy, CELL / 2 + 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+
+          // Eyes
+          const eyeR = 2.5;
           const eyeOff = 4;
+          ctx.fillStyle = "#f4f6fb";
+          let e1x, e1y, e2x, e2y;
+          if (direction.x === 1)       { e1x = hx+3; e1y = hy-eyeOff; e2x = hx+3; e2y = hy+eyeOff; }
+          else if (direction.x === -1) { e1x = hx-3; e1y = hy-eyeOff; e2x = hx-3; e2y = hy+eyeOff; }
+          else if (direction.y === -1) { e1x = hx-eyeOff; e1y = hy-3; e2x = hx+eyeOff; e2y = hy-3; }
+          else                         { e1x = hx-eyeOff; e1y = hy+3; e2x = hx+eyeOff; e2y = hy+3; }
+          ctx.beginPath(); ctx.arc(e1x, e1y, eyeR, 0, Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(e2x, e2y, eyeR, 0, Math.PI*2); ctx.fill();
+          // Pupils
           ctx.fillStyle = "#07090d";
-          if (direction.x === 1) {
-            ctx.fillRect(hx + 2, hy - eyeOff, 3, 3);
-            ctx.fillRect(hx + 2, hy + eyeOff - 3, 3, 3);
-          } else if (direction.x === -1) {
-            ctx.fillRect(hx - 5, hy - eyeOff, 3, 3);
-            ctx.fillRect(hx - 5, hy + eyeOff - 3, 3, 3);
-          } else if (direction.y === -1) {
-            ctx.fillRect(hx - eyeOff, hy - 5, 3, 3);
-            ctx.fillRect(hx + eyeOff - 3, hy - 5, 3, 3);
-          } else {
-            ctx.fillRect(hx - eyeOff, hy + 2, 3, 3);
-            ctx.fillRect(hx + eyeOff - 3, hy + 2, 3, 3);
-          }
+          ctx.beginPath(); ctx.arc(e1x + direction.x*0.8, e1y + direction.y*0.8, 1.2, 0, Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(e2x + direction.x*0.8, e2y + direction.y*0.8, 1.2, 0, Math.PI*2); ctx.fill();
         }
 
         // Particles
@@ -443,35 +455,32 @@
         }
         ctx.globalAlpha = 1;
 
-        // Start screen
+        // Overlays — minimal, just prompts
         if (waiting && !done) {
-          ctx.fillStyle = "rgba(7, 9, 13, 0.88)";
+          ctx.fillStyle = "rgba(7, 9, 13, 0.75)";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
+          const pulse = 0.45 + 0.2 * Math.sin(Date.now() / 800);
+          ctx.fillStyle = `rgba(244, 246, 251, ${pulse})`;
+          ctx.font = "500 15px system-ui";
           ctx.textAlign = "center";
-          ctx.fillStyle = "#aeb8ca";
-          ctx.font = "400 13px system-ui";
-          ctx.fillText(DESCRIPTION, canvas.width / 2, canvas.height / 2 - 60);
-          drawBoard(canvas.width / 2, canvas.height / 2 - 30);
-          ctx.fillStyle = "rgba(244, 246, 251, 0.5)";
-          ctx.font = "500 14px system-ui";
-          ctx.fillText("SPACE to start", canvas.width / 2, canvas.height / 2 + 80);
+          const msg = lives < 3 ? `Lives: ${lives} · SPACE to continue` : "SPACE to start";
+          const ty = canvas.height * 0.38;
+          ctx.fillText(msg, canvas.width / 2, ty);
+          ctx.strokeStyle = `rgba(255, 209, 102, ${pulse * 0.5})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(canvas.width / 2 - 50, ty + 14);
+          ctx.lineTo(canvas.width / 2 + 50, ty + 14);
+          ctx.stroke();
         }
 
-        // Game over overlay
         if (done) {
-          ctx.fillStyle = "rgba(7, 9, 13, 0.88)";
+          ctx.fillStyle = "rgba(7, 9, 13, 0.72)";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.textAlign = "center";
-          ctx.fillStyle = "#ff5a7a";
-          ctx.font = "600 16px system-ui";
-          ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 80);
-          ctx.fillStyle = "#c0c8d8";
-          ctx.font = "400 13px system-ui";
-          ctx.fillText("Score: " + score, canvas.width / 2, canvas.height / 2 - 55);
-          drawBoard(canvas.width / 2, canvas.height / 2 - 30);
           ctx.fillStyle = "#aeb8ca";
-          ctx.font = "400 14px system-ui";
-          ctx.fillText("Press R to restart", canvas.width / 2, canvas.height / 2 + 80);
+          ctx.font = "400 13px system-ui";
+          ctx.textAlign = "center";
+          ctx.fillText(`Score: ${score} · R to restart`, canvas.width / 2, canvas.height / 2);
         }
       }
 
@@ -489,6 +498,7 @@
         document.body.classList.add("embed");
         canvas.focus();
       }
+      postScores();
     </script>
   </body>
 </html>

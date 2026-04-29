@@ -145,10 +145,25 @@
       let done = false;
       let serving = true;
       let waiting = true;
-      const DESCRIPTION = "Destroy bricks with a bouncing ball. Don't let it fall!";
       const BOARD_KEY = "jeparl_breakout";
 
+      function postScores(scores) {
+        try { window.parent.postMessage({ type: "jeparl-scores", game: BOARD_KEY, scores: scores || loadBoard() }, "*"); } catch {}
+      }
+
       function isAI() { return window.location.search.includes("embed"); }
+
+      function getPlayerLabel() {
+        const params = new URLSearchParams(window.location.search);
+        if (isAI()) {
+          const run = params.get("run_name") || "";
+          const ckpt = params.get("checkpoint") || "";
+          if (run && ckpt) return run + " · " + ckpt;
+          if (run) return run;
+          return "AI";
+        }
+        return params.get("player_name") || "HUMAN";
+      }
 
       function loadBoard() {
         try { return JSON.parse(localStorage.getItem(BOARD_KEY) || "[]"); }
@@ -158,38 +173,12 @@
       function saveToBoard(s) {
         if (s <= 0) return loadBoard();
         const scores = loadBoard();
-        scores.push({ score: s, player: isAI() ? "AI" : "HUMAN" });
+        scores.push({ score: s, player: getPlayerLabel(), type: isAI() ? "ai" : "human", date: new Date().toISOString() });
         scores.sort((a, b) => b.score - a.score);
         if (scores.length > 10) scores.length = 10;
         try { localStorage.setItem(BOARD_KEY, JSON.stringify(scores)); } catch {}
+        postScores(scores);
         return scores;
-      }
-
-      function drawBoard(cx, y) {
-        const scores = loadBoard().slice(0, 5);
-        ctx.font = "600 12px system-ui";
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#7a8499";
-        ctx.fillText("HIGH SCORES", cx, y);
-        if (scores.length === 0) {
-          ctx.font = "400 11px system-ui";
-          ctx.fillStyle = "#444";
-          ctx.fillText("No scores yet", cx, y + 18);
-          return;
-        }
-        ctx.font = "400 12px system-ui";
-        scores.forEach((e, i) => {
-          const ey = y + 20 + i * 17;
-          ctx.textAlign = "left";
-          ctx.fillStyle = "#555";
-          ctx.fillText(`${i + 1}.`, cx - 70, ey);
-          ctx.fillStyle = e.player === "AI" ? "#64a8ff" : "#27d6a0";
-          ctx.fillText(e.player, cx - 48, ey);
-          ctx.textAlign = "right";
-          ctx.fillStyle = "#c0c8d8";
-          ctx.fillText(String(e.score), cx + 75, ey);
-        });
-        ctx.textAlign = "center";
       }
 
       function ballSpeed() {
@@ -354,7 +343,18 @@
       }
 
       function update() {
-        if (done || waiting) return;
+        if (done) return;
+
+        // AI auto-start — skip waiting screen in embed mode
+        if (waiting && isAI()) {
+          waiting = false;
+        }
+        if (waiting) return;
+
+        // AI auto-serve — launch ball immediately in embed mode
+        if (serving && isAI()) {
+          launchBall();
+        }
 
         // Paddle: acceleration-based movement
         if (keys.has("ArrowLeft")) {
@@ -608,14 +608,18 @@
         if (waiting && !done) {
           ctx.fillStyle = "rgba(7, 9, 13, 0.88)";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
+          const pulse = 0.45 + 0.2 * Math.sin(Date.now() / 800);
+          ctx.fillStyle = `rgba(244, 246, 251, ${pulse})`;
+          ctx.font = "500 15px system-ui";
           ctx.textAlign = "center";
-          ctx.fillStyle = "#aeb8ca";
-          ctx.font = "400 13px system-ui";
-          ctx.fillText(DESCRIPTION, canvas.width / 2, canvas.height / 2 - 60);
-          drawBoard(canvas.width / 2, canvas.height / 2 - 30);
-          ctx.fillStyle = "rgba(244, 246, 251, 0.5)";
-          ctx.font = "500 14px system-ui";
-          ctx.fillText("SPACE to start", canvas.width / 2, canvas.height / 2 + 80);
+          const ty = canvas.height * 0.38;
+          ctx.fillText("SPACE to start", canvas.width / 2, ty);
+          ctx.strokeStyle = `rgba(255, 209, 102, ${pulse * 0.5})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(canvas.width / 2 - 50, ty + 14);
+          ctx.lineTo(canvas.width / 2 + 50, ty + 14);
+          ctx.stroke();
         }
 
         // Serve prompt
@@ -628,19 +632,12 @@
 
         // Game over overlay
         if (done) {
-          ctx.fillStyle = "rgba(7, 9, 13, 0.88)";
+          ctx.fillStyle = "rgba(7, 9, 13, 0.72)";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.textAlign = "center";
-          ctx.fillStyle = "#ff5a7a";
-          ctx.font = "600 16px system-ui";
-          ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 80);
-          ctx.fillStyle = "#c0c8d8";
-          ctx.font = "400 13px system-ui";
-          ctx.fillText("Score: " + score, canvas.width / 2, canvas.height / 2 - 55);
-          drawBoard(canvas.width / 2, canvas.height / 2 - 30);
           ctx.fillStyle = "#aeb8ca";
           ctx.font = "400 14px system-ui";
-          ctx.fillText("Press R to restart", canvas.width / 2, canvas.height / 2 + 80);
+          ctx.textAlign = "center";
+          ctx.fillText("Press R to restart", canvas.width / 2, canvas.height / 2);
         }
       }
 
@@ -658,6 +655,7 @@
         document.body.classList.add("embed");
         canvas.focus();
       }
+      postScores();
     </script>
   </body>
 </html>

@@ -10,6 +10,7 @@ interface Checkpoint {
 
 interface Run {
   name: string
+  experiment_name?: string
   steps?: number
   episodes?: number
   best_score?: number
@@ -36,6 +37,11 @@ export const useRunsStore = defineStore('runs', () => {
     try {
       const data = await getJson<{ runs: Run[] }>('/api/runs' + (showSmoke.value ? '?smoke=true' : ''))
       runs.value = data.runs || []
+      if (!selectedRun.value && runs.value.length > 0) {
+        const first = runs.value[0].name
+        selectedRun.value = first
+        loadRunDetail(first)
+      }
     } catch { /* swallow */ }
   }
 

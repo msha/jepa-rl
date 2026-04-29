@@ -2,9 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Status: Initial Scaffold
-
-This repository now contains documentation plus an initial installable Python scaffold:
+## Project Status: Phases 0-6 Complete, Phase 7 (Frozen JEPA + DQN) Implemented
 
 ```
 jepa-rl/
@@ -17,39 +15,44 @@ jepa-rl/
   CLAUDE.md
   configs/
     base.yaml
-    presets/
-    games/
+    presets/         (tiny, small, base)
+    games/           (breakout, snake, asteroids)
   docs/
     design_doc.md
     *.pdf            (6 reference papers)
+  games/             (self-contained HTML games)
   scripts/
   src/jepa_rl/
+    browser/         (Playwright env, action spaces)
+    envs/            (base interface, wrappers)
+    models/          (DQN, JEPA, frozen JEPA, encoders, predictors, losses)
+    replay/          (buffer, sequence sampling)
+    training/        (pixel_dqn, jepa_world, frozen_jepa_dqn, simple_q)
+    ui/              (server.py - Python HTTP + Vue SPA)
+    utils/           (config, artifacts, checkpoint, metrics, dashboard)
   tests/
+  ui/                (Vue 3 + Vite + Pinia SPA)
 ```
 
 Implemented now:
 
 - uv-managed environment: `uv sync` creates `.venv` and installs from `uv.lock`. Dev tooling (pytest, ruff) is in the `[dependency-groups].dev` table; runtime extras (`config`, `browser`, `train`, `all`) remain under `[project.optional-dependencies]`.
-- `jepa-rl validate-config`.
-- `jepa-rl init-run`.
+- `jepa-rl validate-config`, `jepa-rl init-run`.
 - `jepa-rl open-game` to launch the configured game in visible Chromium.
-- `jepa-rl ml-smoke` to verify the current linear Q learner reduces synthetic loss.
-- `jepa-rl ui` to run the live training dashboard and control panel (accepts `--config`, `--run`, or auto-discovers `configs/base.yaml` with no args). The UI is a Vue 3 + Vite SPA in `ui/` served from the Python server.
-- `jepa-rl collect-random` for the local Breakout smoke game.
-- `jepa-rl train` for the current NumPy linear pixel-Q smoke model.
-- `jepa-rl eval` for the current `.npz` smoke-model checkpoints.
-- Typed config validation and starter configs.
-- Local HTML games at `games/<name>/index.html`: breakout, snake, asteroids.
-- Playwright screenshot environment and DOM score reader.
-- Discrete keyboard action parsing.
-- In-memory replay buffer and sequence sampling.
-- Unit tests for the implemented contracts.
+- `jepa-rl ml-smoke` to verify the linear Q learner reduces synthetic loss.
+- `jepa-rl ui` to run the live training dashboard (Vue 3 + Vite SPA in `ui/` served from Python).
+- `jepa-rl collect-random` for random policy data collection with baseline summary.
+- `jepa-rl train` dispatches on `agent.algorithm`: `dqn` (pixel DQN), `frozen_jepa_dqn` (frozen JEPA encoder + DQN head), or `linear_q` (smoke).
+- `jepa-rl eval` evaluates `.pt` (DQN/frozen JEPA) or `.npz` (linear_q) checkpoints.
+- `jepa-rl train-world` trains the JEPA action-conditioned world model offline.
+- Full pixel DQN with dueling architecture, Double DQN, epsilon-greedy, target network.
+- JEPA world model with EMA target encoder, transformer predictor, multi-horizon prediction, collapse metrics.
+- Frozen JEPA + DQN: loads pretrained encoder, freezes it, trains Q-head on latents.
+- Playwright screenshot environment, DOM score reader, keyboard action spaces.
+- In-memory replay buffer with uniform and sequence sampling.
+- 162 unit tests covering all implemented contracts.
 
 Run any project command via `uv run <cmd>` (e.g. `uv run pytest`, `uv run jepa-rl ...`). The Makefile wraps the common targets.
-
-The current `train` command is not the planned DQN/JEPA stack; it is a small linear Q-learning smoke path that proves browser control, reward reading, metrics, and checkpointing. `jepa-rl train-world` is still a planned stub.
-
-The directory may still not be a git repository. Do not run destructive git commands without first checking `git status`.
 
 ## Canonical Documents
 
@@ -98,7 +101,7 @@ Every game in `games/<name>/index.html` is a single self-contained HTML file (no
 
 ### Game Descriptions
 
-Each game has a one-line `DESCRIPTION` constant shown on the start screen:
+Game descriptions are stored in the Python server (`_GAME_DESCRIPTIONS` dict in `server.py`) and displayed in the UI settings panel. When adding a new game, add its description there.
 
 | Game | Description |
 |---|---|
@@ -106,27 +109,26 @@ Each game has a one-line `DESCRIPTION` constant shown on the start screen:
 | Snake | Eat food to grow longer. Avoid walls and yourself! |
 | Asteroids | Shoot the asteroids. Don't get hit! |
 
-New games must define their own `DESCRIPTION` constant.
-
 ### Highscore Board
 
-Every game includes a localStorage-backed highscore board that distinguishes **HUMAN** vs **AI** players:
+Every game persists highscores via localStorage and sends them to the UI via `postMessage`. The board distinguishes **HUMAN** vs **AI** players:
 
 - `?embed` in the URL (RL environment mode) → scores tagged as `AI`
 - Direct browser play → scores tagged as `HUMAN`
 - Storage key: `jeparl_<game>_scores` (e.g. `jeparl_breakout_scores`)
-- Top 10 persisted, top 5 displayed on canvas
+- Top 10 persisted in localStorage, top 5 shown in the UI settings panel
 - `AI` entries rendered in `#64a8ff` (blue), `HUMAN` entries in `#27d6a0` (green)
-- Shown on both the start screen and the game-over screen
-- `saveToBoard(score)` called inside `setDone()` — scores are saved when the episode ends
+- Scores are NOT rendered on the game canvas — they appear only in the UI panel
+- `saveToBoard(score)` called inside `setDone()` — saves to localStorage and posts to parent
+- `postScores()` called on load — sends current board to UI immediately
 
 Required functions (same pattern in every game):
 
 ```javascript
 function isAI() { return window.location.search.includes("embed"); }
 function loadBoard() { /* read localStorage, return array */ }
-function saveToBoard(s) { /* add entry, sort desc, trim to 10, persist */ }
-function drawBoard(cx, y) { /* render top 5 on canvas */ }
+function saveToBoard(s) { /* add entry, sort desc, trim to 10, persist, postMessage */ }
+function postScores(scores) { /* window.parent.postMessage({ type: "jeparl-scores", ... }) */ }
 ```
 
 ### DOM Contract (required, identical across all games)
@@ -161,7 +163,7 @@ function drawBoard(cx, y) { /* render top 5 on canvas */ }
 - **Neutral objects**: `#c0c8d8` (light gray) for bricks, asteroids.
 - **Accent/highlight**: `#ffd166` (gold) for bullets, special pickups.
 - **Particles**: Use `spawnParticles()` pattern — small squares with decay, gravity, and alpha fade for juice.
-- **No visible text on canvas** except start screen (description + highscores + "SPACE to start"), "SPACE to serve" (breakout only), and game-over screen (GAME OVER + score + highscores + "Press R to restart"). All use `rgba(244, 246, 251, 0.5)` or `#aeb8ca`, `14px system-ui`.
+- **No visible text on canvas** except "SPACE to start" (while waiting), "SPACE to serve" (breakout only), and "Press R to restart" (game over overlay at 72% dark fill). No description, no highscores on canvas — those live in the UI settings panel.
 
 ### Controls and Lifecycle
 
@@ -316,26 +318,29 @@ Current UI capabilities (must stay in sync with CLI):
 
 | Feature | CLI | UI |
 |---|---|---|
-| Start DQN or linear_q training | `jepa-rl train` | Start button, dispatches on `agent.algorithm` |
+| Start training (dqn, frozen_jepa_dqn, or linear_q) | `jepa-rl train` | Start button, dispatches on `agent.algorithm` |
 | Stop training | Ctrl-C | Stop button (signals `stop_event`) |
-| Evaluate latest checkpoint | `jepa-rl eval` | Eval button, dispatches on `agent.algorithm`, reads `.pt` or `.npz` |
+| Evaluate checkpoint | `jepa-rl eval` | Eval button, dispatches on `agent.algorithm`, reads `.pt` or `.npz` |
+| Train JEPA world model | `jepa-rl train-world` | Train World button |
+| Run ML smoke test | `jepa-rl ml-smoke` | ML Smoke button |
+| Collect random data | `jepa-rl collect-random` | Collect Random button |
 | View live metrics | dashboard.html | Real-time charts: score, loss, epsilon, td-error |
 | View config | `validate-config` | Config panel (toggle) |
 | Browse runs | `ls runs/` | Run selector dropdown |
 | Switch config | `--config` flag | Config selector dropdown |
-| Play game manually | `open-game` | Embedded iframe with ◀ serve ▶ reset controls |
+| Play game manually | `open-game` | Embedded iframe with serve/reset controls |
 
-## Recommended Stack (Phase 0 pinned, more arrives per phase)
+## Recommended Stack
 
 - uv (environment manager + lockfile)
 - Python 3.11+
-- PyTorch (in `train` extra; not yet wired)
-- Playwright (Chromium) (in `browser` extra; not yet wired)
+- PyTorch (in `train` extra; wired for DQN, JEPA, frozen JEPA DQN)
+- Playwright (Chromium) (in `browser` extra; wired for browser env)
 - NumPy, Pillow, OpenCV (in `train` / `browser` extras)
-- Pydantic or OmegaConf for typed config (currently using a hand-rolled validator + PyYAML)
+- Hand-rolled typed config validator + PyYAML (no Pydantic/OmegaConf dependency)
 - pytest, ruff (in the `dev` dependency group; mypy may be added later)
 - Vue 3 + Vite + Pinia (in `ui/`; build with `make ui-build`, dev with `make ui-dev`)
-- TensorBoard / W&B / MLflow for experiment logging (Phase 4)
+- TensorBoard / W&B / MLflow for experiment logging (Phase 4, not yet implemented)
 
 Common commands:
 

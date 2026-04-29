@@ -1,0 +1,10 @@
+[  358179ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:8765/api/state:0
+[  358498ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8765/api/state:0
+[  358626ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8765/api/frame?ts=1777421871701:0
+[  358710ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8765/api/runs:0
+[  358807ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8765/api/state:0
+[  359115ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8765/api/state:0
+[  359141ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8765/api/frame?ts=1777421872216:0
+[  359420ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8765/api/state:0
+[  359642ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8765/api/frame?ts=1777421872717:0
+[  359739ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8765/api/state:0

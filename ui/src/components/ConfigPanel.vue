@@ -9,7 +9,6 @@ const config = useConfigStore()
 const runs = useRunsStore()
 
 const collapsedGroups = ref<Set<string>>(new Set())
-
 const configGroups = computed(() => runs.runConfigDetail ?? training.configDetail)
 
 function toggleGroup(title: string) {
@@ -31,78 +30,101 @@ async function applyOverride(group: string, key: string, value: string) {
   }
 }
 
-function onInputBlur(e: FocusEvent) {
-  const el = e.target as HTMLInputElement
-  if (!el) return
-  const group = el.dataset.group || ''
-  const key = el.dataset.key || ''
-  applyOverride(group, key, el.value)
+// Modal State
+const editingField = ref<{ group: string, key: string, val: unknown, type: string, opts?: string[] } | null>(null)
+const editValue = ref<string>('')
+const editPopoverStyle = ref<Record<string, string>>({})
+
+function openEdit(group: string, f: any[], event: MouseEvent) {
+  if (f[3]?.type === 'readonly') return
+  editingField.value = {
+    group,
+    key: f[0],
+    val: f[1],
+    type: f[3]?.type || 'text',
+    opts: f[3]?.options
+  }
+  editValue.value = String(f[1])
+  const el = event.currentTarget as HTMLElement
+  const rect = el.getBoundingClientRect()
+  const w = Math.max(220, rect.width)
+  let top = rect.bottom + 4
+  let left = rect.left
+  if (top + 110 > window.innerHeight - 8) top = rect.top - 110 - 4
+  if (left + w > window.innerWidth - 8) left = rect.right - w
+  if (left < 8) left = 8
+  editPopoverStyle.value = { top: `${top}px`, left: `${left}px`, width: `${w}px` }
 }
 
-function onInputEnter(e: KeyboardEvent) {
-  if (e.key !== 'Enter') return
-  const el = e.target as HTMLInputElement
-  if (!el) return
-  el.blur()
+function closeEdit() {
+  editingField.value = null
 }
 
-function onSelectChange(e: Event) {
-  const el = e.target as HTMLSelectElement
-  if (!el) return
-  applyOverride(el.dataset.group || '', el.dataset.key || '', el.value)
+function saveEdit() {
+  if (!editingField.value) return
+  applyOverride(editingField.value.group, editingField.value.key, editValue.value)
+  closeEdit()
 }
 
-function onCheckboxChange(e: Event) {
+function onCheckboxChange(e: Event, group: string, key: string) {
   const el = e.target as HTMLInputElement
   if (!el) return
-  applyOverride(el.dataset.group || '', el.dataset.key || '', el.checked ? 'true' : 'false')
+  applyOverride(group, key, el.checked ? 'true' : 'false')
 }
 </script>
 
 <template>
   <div class="config-panel">
-    <div class="section-header" title="All config parameters for the active game">
+    <div class="section-header" title="All config parameters for the active game" style="margin-bottom: 6px;">
       config
     </div>
-    <div class="run-config" id="runConfig">
-      <div v-for="group in configGroups" :key="group.title"
-           :class="['cfg-group', { 'cfg-collapsed': isCollapsed(group.title) || group.collapsed }]"
-           :data-group-title="group.title">
-        <div class="cfg-group-title" @click="toggleGroup(group.title)">{{ group.title }}</div>
-        <div class="cfg-fields">
+    <div class="run-config" id="runConfig" style="display: flex; flex-direction: column; gap: 8px;">
+      <div v-for="group in configGroups" :key="group.title" class="cfg-group">
+        <div class="cfg-group-title" @click="toggleGroup(group.title)" style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); cursor: pointer; margin-bottom: 3px; display: flex; align-items: center; gap: 4px;">
+          <span style="font-size: 8px; opacity: 0.7;">{{ isCollapsed(group.title) || group.collapsed ? '▶' : '▼' }}</span> {{ group.title }}
+        </div>
+        <div class="settings-table" v-show="!isCollapsed(group.title) && !group.collapsed">
           <template v-for="f in group.fields" :key="f[0]">
-            <div v-if="f[3]?.type === 'readonly'" class="cfg-row">
-              <span class="cfg-key" :title="f[2]">{{ f[0] }}</span>
-              <span class="cfg-val">{{ String(f[1]) }}</span>
+            <span class="sk" :title="f[2]" style="display: flex; align-items: center;">{{ f[0] }}</span>
+            <span v-if="f[3]?.type === 'readonly'" class="sv" :title="f[2]">{{ String(f[1]) }}</span>
+            <div v-else-if="f[3]?.type === 'bool'" style="display: flex; align-items: center;">
+              <input type="checkbox" :checked="!!f[1]" :title="f[2]" @change="e => onCheckboxChange(e, group.title, f[0])" style="accent-color: var(--accent); margin: 0;">
             </div>
-            <div v-else-if="f[3]?.type === 'bool'" class="cfg-row">
-              <span class="cfg-key" :title="f[2]">{{ f[0] }}</span>
-              <input type="checkbox" class="cfg-checkbox" :data-group="group.title" :data-key="f[0]" :checked="!!f[1]" :title="f[2]" @change="onCheckboxChange">
-            </div>
-            <div v-else-if="f[3]?.type === 'select'" class="cfg-row">
-              <span class="cfg-key" :title="f[2]">{{ f[0] }}</span>
-              <select class="cfg-select" :data-group="group.title" :data-key="f[0]" data-type="select" :title="f[2]" @change="onSelectChange">
-                <option v-for="o in f[3].options || []" :key="o" :value="o" :selected="String(o) === String(f[1])">{{ o }}</option>
-              </select>
-            </div>
-            <div v-else class="cfg-row">
-              <span class="cfg-key" :title="f[2]">{{ f[0] }}</span>
-              <input class="cfg-input"
-                     :type="f[3]?.type === 'number' ? 'number' : 'text'"
-                     :min="f[3]?.min"
-                     :max="f[3]?.max"
-                     :step="f[3]?.step ?? 1"
-                     :data-group="group.title"
-                     :data-key="f[0]"
-                     :data-type="f[3]?.type || 'text'"
-                     :value="String(f[1])"
-                     :title="f[2]"
-                     @blur="onInputBlur"
-                     @keydown="onInputEnter">
+            <div v-else class="sv clickable-field" :title="f[2] + ' (Click to edit)'" @click="openEdit(group.title, f, $event)">
+              {{ String(f[1]) }}
             </div>
           </template>
         </div>
       </div>
     </div>
+
+    <!-- Inline Edit Popover -->
+    <div v-if="editingField" class="popover-backdrop" @click="closeEdit"></div>
+    <div v-if="editingField" class="popover" :style="editPopoverStyle">
+      <div class="popover-label">{{ editingField.key }}</div>
+
+      <select v-if="editingField.type === 'select'" v-model="editValue" class="popover-input" @keyup.enter="saveEdit" autofocus>
+        <option v-for="o in editingField.opts" :key="o" :value="String(o)">{{ o }}</option>
+      </select>
+
+      <input v-else
+             v-model="editValue"
+             :type="editingField.type === 'number' ? 'number' : 'text'"
+             class="popover-input"
+             @keyup.enter="saveEdit"
+             @keyup.escape="closeEdit"
+             autofocus>
+
+      <div class="popover-actions">
+        <button class="btn-tiny" @click="closeEdit">cancel</button>
+        <button class="btn-accent-tiny" @click="saveEdit">save</button>
+      </div>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.cfg-group + .cfg-group {
+  margin-top: 4px;
+}
+</style>

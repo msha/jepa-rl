@@ -563,7 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_world.add_argument("--headed", action="store_true", help="Show the browser window.")
     train_world.set_defaults(func=_cmd_train_world)
 
-    train = subparsers.add_parser("train", help="Train the current minimal pixel Q model.")
+    train = subparsers.add_parser("train", help="Train a DQN, frozen JEPA DQN, or linear Q model.")
     train.add_argument("--config", type=Path, required=True, help="Path to a config YAML file.")
     train.add_argument("--experiment", type=str, default=None, help="Optional run directory name.")
     train.add_argument(
@@ -597,7 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train.set_defaults(func=_cmd_train)
 
-    evaluate = subparsers.add_parser("eval", help="Evaluate a trained linear Q checkpoint.")
+    evaluate = subparsers.add_parser("eval", help="Evaluate a trained checkpoint (.pt or .npz).")
     evaluate.add_argument("--config", type=Path, required=True, help="Path to a config YAML file.")
     evaluate.add_argument(
         "--checkpoint",

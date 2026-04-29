@@ -98,13 +98,13 @@ When adding a new game:
 
 1. Copy `games/breakout/index.html` as the starting point.
 2. Keep the `<header>`, `#score`, `#lives`, `#status[data-state]` DOM structure and the CSS verbatim — only change `<title>` and `<h1>` text.
-3. Implement the required JS functions: `setDone`, `updateStats`, `resetGame`, `update`, `draw`, `loop`, `isAI`, `loadBoard`, `saveToBoard`, `drawBoard`.
-4. Define a `DESCRIPTION` constant — one-line game summary shown on the start screen.
+3. Implement the required JS functions: `setDone`, `updateStats`, `resetGame`, `update`, `draw`, `loop`, `isAI`, `loadBoard`, `saveToBoard`, `postScores`.
+4. Add the game description to `_GAME_DESCRIPTIONS` in `src/jepa_rl/ui/server.py`.
 5. Use the standard color palette (`#07090d` bg, `#f4f6fb` player, `#27d6a0` positive, `#ff5a7a` danger, `#ffd166` accent, `#c0c8d8` neutral).
 6. Start with 3 lives, Space to begin, R to restart, arrow keys for movement.
 7. Include a difficulty progression mechanism (increasing speed, more enemies, harder obstacles).
 8. Score increments on discrete events (not per-frame), with coarse values (+10, +20, +50, +100).
-9. Include a highscore board (localStorage, `jeparl_<game>_scores` key) that tags scores as HUMAN or AI based on `?embed` URL param. Show top 5 on start screen and game-over screen.
+9. Include a highscore board (localStorage, `jeparl_<game>_scores` key) that tags scores as HUMAN or AI based on `?embed` URL param. Scores are NOT rendered on canvas — they are sent to the UI via `postMessage` and displayed in the settings panel.
 10. Create `configs/games/<name>.yaml` extending `../base.yaml` and `../presets/small.yaml`.
 11. Verify with `uv run jepa-rl validate-config --config configs/games/<name>.yaml`.
 

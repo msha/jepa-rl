@@ -30,6 +30,8 @@ actions:
     - ArrowUp+ArrowLeft
     - ArrowUp+ArrowRight
     - ArrowUp+Space
+    - ArrowLeft+Space
+    - ArrowRight+Space
 
 reward:
   type: score_delta

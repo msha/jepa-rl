@@ -16,6 +16,7 @@ async function onConfigChange() {
   if (!selectedConfig.value) return
   try {
     await configStore.switchConfig(selectedConfig.value)
+    reloadGame()
   } catch (e) {
     console.error(e)
   }
@@ -27,6 +28,7 @@ const props = defineProps<{
   resetKey: string
   actionKeys: string[]
   steps: Record<string, unknown>[]
+  playerName: string
 }>()
 
 const isTraining = computed(() => !!props.job?.running || props.job?.status === 'running' || props.job?.status === 'starting')
@@ -37,6 +39,17 @@ const gameStats = ref('')
 const gameFrame = ref<HTMLIFrameElement | null>(null)
 const gameReloadToken = ref(0)
 const evalClientError = ref('')
+const gameHighscores = ref<{ score: number; player: string }[]>([])
+
+const emit = defineEmits<{ highscores: [scores: { score: number; player: string }[]] }>()
+
+function onGameMessage(event: MessageEvent) {
+  if (event.data?.type !== 'jeparl-scores') return
+  gameHighscores.value = event.data.scores || []
+  emit('highscores', gameHighscores.value)
+}
+onMounted(() => window.addEventListener('message', onGameMessage))
+onBeforeUnmount(() => window.removeEventListener('message', onGameMessage))
 
 let aiInterval: ReturnType<typeof window.setInterval> | null = null
 let aiStepInFlight = false
@@ -74,6 +87,24 @@ const gameStatus = computed(() => {
   return 'manual play'
 })
 
+const hasArrow = (dir: string) => props.actionKeys.some(k => k.includes(dir))
+const showUp = computed(() => hasArrow('ArrowUp'))
+const showDown = computed(() => hasArrow('ArrowDown'))
+const showLeft = computed(() => hasArrow('ArrowLeft'))
+const showRight = computed(() => hasArrow('ArrowRight'))
+const showSpace = computed(() => props.actionKeys.some(k => k.includes('Space')))
+
+const isIdle = computed(() => !isTraining.value && !isEvaluating.value)
+
+const litDir = ref<string | null>(null)
+let litTimer: ReturnType<typeof window.setTimeout> | null = null
+
+function lightDir(dir: string) {
+  if (litTimer) clearTimeout(litTimer)
+  litDir.value = dir
+  litTimer = setTimeout(() => { litDir.value = null }, 200)
+}
+
 const sectionClass = computed(() => ({
   'game-section': true,
   training: isTraining.value,
@@ -82,8 +113,18 @@ const sectionClass = computed(() => ({
 
 const trainFrameSrc = ref('')
 const gameSrc = computed(() => {
-  const suffix = gameReloadToken.value ? `&ts=${gameReloadToken.value}` : ''
-  return `/game?embed${suffix}`
+  const ts = gameReloadToken.value ? `&ts=${gameReloadToken.value}` : ''
+  if (isTraining.value) {
+    const runName = encodeURIComponent(props.job?.run_name || '')
+    return `/game?embed&run_name=${runName}${ts}`
+  }
+  if (isEvaluating.value) {
+    const runName = encodeURIComponent(props.evalJob?.run_name || '')
+    const ckpt = encodeURIComponent(props.evalJob?.checkpoint_name || '')
+    return `/game?embed&run_name=${runName}&checkpoint=${ckpt}${ts}`
+  }
+  const name = encodeURIComponent(props.playerName || 'HUMAN')
+  return `/game?embed&player_name=${name}${ts}`
 })
 
 usePolling(async () => {
@@ -139,7 +180,9 @@ function gameAction(action: string) {
   const doc = gameFrame.value?.contentDocument
   if (!win || !doc) return
   const keyMap: Record<string, { key: string; code: string }> = {
+    up: { key: 'ArrowUp', code: 'ArrowUp' },
     left: { key: 'ArrowLeft', code: 'ArrowLeft' },
+    down: { key: 'ArrowDown', code: 'ArrowDown' },
     right: { key: 'ArrowRight', code: 'ArrowRight' },
     space: { key: ' ', code: 'Space' },
     reset: { key: 'r', code: 'KeyR' },
@@ -316,29 +359,6 @@ function fmtNum(v: unknown): string {
   if (Math.abs(v) >= 10) return v.toFixed(2)
   return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
 }
-
-// Open game in a visible browser window
-const openGameSeconds = ref(10)
-const openGameRandomSteps = ref(0)
-const openGameHold = ref(false)
-const openGameStatus = ref('')
-const openGameExpanded = ref(false)
-
-async function openInBrowser() {
-  openGameStatus.value = ''
-  try {
-    const res = await fetch('/api/open-game', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seconds: openGameSeconds.value, random_steps: openGameRandomSteps.value, hold: openGameHold.value }),
-    })
-    const data = await res.json() as { ok?: boolean; error?: string }
-    if (!data.ok) throw new Error(data.error || 'failed')
-    openGameStatus.value = openGameHold.value ? 'opened (hold mode — close manually)' : `opened for ${openGameSeconds.value}s`
-  } catch (e) {
-    openGameStatus.value = `error: ${e instanceof Error ? e.message : String(e)}`
-  }
-}
 </script>
 
 <template>
@@ -359,20 +379,23 @@ async function openInBrowser() {
     </div>
     <img class="train-frame" id="trainFrame" :src="trainFrameSrc" alt="training view" title="Live training screenshot" />
     <div class="game-controls" v-show="showGame">
-      <span class="ctrl-label">play</span>
-      <button @click="gameAction('left')" title="Send ArrowLeft">&#9664; left</button>
-      <button @click="gameAction('space')" title="Send Space">serve</button>
-      <button @click="gameAction('right')" title="Send ArrowRight">right &#9654;</button>
-      <button @click="gameAction('reset')" title="Send R">reset</button>
-      <span class="ctrl-sep"></span>
-      <button class="btn-tiny" @click="openGameExpanded = !openGameExpanded" title="Open game in a visible Chromium window">open in browser</button>
-    </div>
-    <div v-if="openGameExpanded" class="open-game-panel">
-      <div class="field">secs <input v-model.number="openGameSeconds" type="number" min="1" style="width:48px" /></div>
-      <div class="field">rand steps <input v-model.number="openGameRandomSteps" type="number" min="0" style="width:48px" /></div>
-      <label class="tc-check"><input type="checkbox" v-model="openGameHold" /> hold</label>
-      <button class="btn-accent" @click="openInBrowser">open</button>
-      <span v-if="openGameStatus" class="open-game-status">{{ openGameStatus }}</span>
+      <button @click="gameAction('space')" class="ctrl-act" :class="{ 'ctrl-act-secondary': !showSpace, 'ctrl-flicker': isIdle }" title="Space">{{ showSpace ? 'space' : 'start' }}</button>
+      <div class="ctrl-dpad">
+        <button v-if="showUp" @click="gameAction('up'); lightDir('up')" class="ctrl-dir" :class="{ 'ctrl-dir-lit': litDir === 'up' }" title="ArrowUp">&#9650;</button>
+        <div v-else class="ctrl-dir ctrl-dir-empty"></div>
+        <div class="ctrl-dpad-mid">
+          <button v-if="showLeft" @click="gameAction('left'); lightDir('left')" class="ctrl-dir" :class="{ 'ctrl-dir-lit': litDir === 'left' }" title="ArrowLeft">&#9664;</button>
+          <div v-else class="ctrl-dir ctrl-dir-empty"></div>
+          <div class="ctrl-dpad-center"></div>
+          <button v-if="showRight" @click="gameAction('right'); lightDir('right')" class="ctrl-dir" :class="{ 'ctrl-dir-lit': litDir === 'right' }" title="ArrowRight">&#9654;</button>
+          <div v-else class="ctrl-dir ctrl-dir-empty"></div>
+        </div>
+        <button v-if="showDown" @click="gameAction('down'); lightDir('down')" class="ctrl-dir" :class="{ 'ctrl-dir-lit': litDir === 'down' }" title="ArrowDown">&#9660;</button>
+        <div v-else class="ctrl-dir ctrl-dir-empty"></div>
+      </div>
+      <div class="ctrl-actions">
+        <button @click="gameAction('reset')" class="ctrl-act ctrl-act-secondary" title="R">reset</button>
+      </div>
     </div>
   </div>
 </template>

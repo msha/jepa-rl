@@ -1,5 +1,3 @@
-# ruff: noqa: E501
-
 import base64
 import collections
 import dataclasses
@@ -42,6 +40,7 @@ class EvalJob:
     config: ProjectConfig
     algorithm: str
     episodes_target: int
+    checkpoint_name: str = ""
     episode_count: int = 0
     scores: list = field(default_factory=list)
     status: str = "running"
@@ -233,7 +232,10 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             if dist is not None and (dist / "index.html").exists():
                 self._send_file(dist / "index.html", "text/html; charset=utf-8")
             else:
-                self._send_html(render_ui_html(state))
+                self.send_error(
+                    HTTPStatus.NOT_FOUND,
+                    "Vue UI not built — run `make ui-build` first",
+                )
 
         def _send_static_asset(self, request_path: str) -> None:
             dist = _ui_dist_dir()
@@ -318,20 +320,30 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 try:
                     eval_config = load_config(snapshot)
                 except Exception as exc:  # noqa: BLE001
-                    self._send_json({"ok": False, "error": f"run config invalid: {exc}"}, status=400)
+                    self._send_json(
+                        {"ok": False, "error": f"run config invalid: {exc}"}, status=400
+                    )
                     return
             algorithm = eval_config.agent.algorithm
             expected_suffix = ".pt" if algorithm in {"dqn", "frozen_jepa_dqn"} else ".npz"
             ckpt_name = body.get("checkpoint")
             if ckpt_name:
                 if not ckpt_name.endswith(expected_suffix):
-                    self._send_json({"ok": False, "error": f"checkpoint {ckpt_name} is not a {algorithm} checkpoint (expected {expected_suffix})"}, status=400)
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "error": f"checkpoint {ckpt_name} is not a {algorithm} checkpoint (expected {expected_suffix})",
+                        },
+                        status=400,
+                    )
                     return
                 checkpoint = eval_run_dir / "checkpoints" / ckpt_name
             else:
                 checkpoint = eval_run_dir / "checkpoints" / f"latest{expected_suffix}"
             if not checkpoint.exists():
-                self._send_json({"ok": False, "error": f"checkpoint not found: {checkpoint.name}"}, status=404)
+                self._send_json(
+                    {"ok": False, "error": f"checkpoint not found: {checkpoint.name}"}, status=404
+                )
                 return
             try:
                 device = None
@@ -341,7 +353,9 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     from jepa_rl.utils.checkpoint import load_torch_checkpoint
 
                     device = resolve_torch_device(eval_config.experiment.device)
-                    net = build_q_network(eval_config, num_actions=eval_config.actions.num_actions).to(device)
+                    net = build_q_network(
+                        eval_config, num_actions=eval_config.actions.num_actions
+                    ).to(device)
                     load_torch_checkpoint(checkpoint, model=net, target_model=None, optimizer=None)
                     net.eval()
                     model = net
@@ -355,14 +369,33 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     if jepa_ckpt_override:
                         jepa_ckpt = Path(jepa_ckpt_override)
                     else:
-                        jepa_ckpt = eval_config.training.extra.get("jepa_checkpoint") if hasattr(eval_config.training, "extra") else None
+                        jepa_ckpt = (
+                            eval_config.training.extra.get("jepa_checkpoint")
+                            if hasattr(eval_config.training, "extra")
+                            else None
+                        )
                     if not jepa_ckpt:
-                        candidates = sorted(Path(eval_config.experiment.output_dir).glob("*_world/checkpoints/latest.pt"), reverse=True)
+                        candidates = sorted(
+                            Path(eval_config.experiment.output_dir).glob(
+                                "*_world/checkpoints/latest.pt"
+                            ),
+                            reverse=True,
+                        )
                         if not candidates:
-                            self._send_json({"ok": False, "error": "No JEPA checkpoint found for frozen_jepa_dqn eval"}, status=400)
+                            self._send_json(
+                                {
+                                    "ok": False,
+                                    "error": "No JEPA checkpoint found for frozen_jepa_dqn eval",
+                                },
+                                status=400,
+                            )
                             return
                         jepa_ckpt = candidates[0]
-                    net = build_frozen_jepa_q_network(eval_config, num_actions=eval_config.actions.num_actions, jepa_checkpoint_path=Path(jepa_ckpt)).to(device)
+                    net = build_frozen_jepa_q_network(
+                        eval_config,
+                        num_actions=eval_config.actions.num_actions,
+                        jepa_checkpoint_path=Path(jepa_ckpt),
+                    ).to(device)
                     load_torch_checkpoint(checkpoint, model=net, target_model=None, optimizer=None)
                     net.eval()
                     model = net
@@ -371,7 +404,10 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
 
                     model = LinearQModel.load(checkpoint)
                 else:
-                    self._send_json({"ok": False, "error": f"in-iframe eval not supported for {algorithm}"}, status=400)
+                    self._send_json(
+                        {"ok": False, "error": f"in-iframe eval not supported for {algorithm}"},
+                        status=400,
+                    )
                     return
                 frame_stack = eval_config.observation.frame_stack
                 frame_buffer: collections.deque = collections.deque(maxlen=frame_stack)
@@ -385,6 +421,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     config=eval_config,
                     algorithm=algorithm,
                     episodes_target=episodes,
+                    checkpoint_name=checkpoint.name,
                     model=model,
                     device=device,
                     frame_buffer=frame_buffer,
@@ -395,7 +432,10 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             with state.lock:
                 eval_job = state.eval_job
             if eval_job is None or eval_job.model is None:
-                self._send_json({"ok": False, "error": "no eval session; call /api/eval/start first"}, status=400)
+                self._send_json(
+                    {"ok": False, "error": "no eval session; call /api/eval/start first"},
+                    status=400,
+                )
                 return
             eval_config = eval_job.config
             body = self._read_json_body()
@@ -413,6 +453,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     complete = ep_count >= ep_target
                     if complete:
                         import numpy as np
+
                         sc = eval_job.scores
                         eval_job.status = "completed"
                         eval_job.result = {
@@ -421,7 +462,9 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                             "best_score": max(sc) if sc else 0.0,
                             "mean_score": float(np.mean(sc)) if sc else 0.0,
                         }
-                self._send_json({"ok": True, "done": True, "complete": complete, "episode": ep_count})
+                self._send_json(
+                    {"ok": True, "done": True, "complete": complete, "episode": ep_count}
+                )
                 return
 
             try:
@@ -486,13 +529,15 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             config_path_str = body.get("config") or str(state.config_path)
             try:
                 cfg = load_config(Path(config_path_str))
-                self._send_json({
-                    "ok": True,
-                    "game": cfg.game.name,
-                    "algorithm": cfg.agent.algorithm,
-                    "actions": cfg.actions.num_actions,
-                    "device": cfg.experiment.device,
-                })
+                self._send_json(
+                    {
+                        "ok": True,
+                        "game": cfg.game.name,
+                        "algorithm": cfg.agent.algorithm,
+                        "actions": cfg.actions.num_actions,
+                        "device": cfg.experiment.device,
+                    }
+                )
             except Exception as exc:  # noqa: BLE001
                 self._send_json({"ok": False, "error": str(exc)}, status=400)
 
@@ -502,19 +547,24 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             random_steps = int(body.get("random_steps") or 0)
             hold = bool(body.get("hold", False))
             try:
-                from jepa_rl.browser.playwright_env import PlaywrightBrowserGameEnv
                 import threading as _threading
 
+                from jepa_rl.browser.playwright_env import PlaywrightBrowserGameEnv
+
                 def _open_worker() -> None:
-                    with PlaywrightBrowserGameEnv(state.config, headless=False, run_dir=state.run_dir) as env:
+                    with PlaywrightBrowserGameEnv(
+                        state.config, headless=False, run_dir=state.run_dir
+                    ) as env:
                         env.reset()
                         if random_steps > 0:
                             import random as _random
+
                             rng = _random.Random(state.config.experiment.seed)
                             for _ in range(random_steps):
                                 env.step(rng.randrange(state.config.actions.num_actions))
                         if not hold:
                             import time as _time
+
                             _time.sleep(seconds)
 
                 t = _threading.Thread(target=_open_worker, daemon=True)
@@ -530,15 +580,18 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             seed = int(body.get("seed") or 0)
             try:
                 from jepa_rl.training.simple_q import run_linear_q_ml_smoke
+
                 result = run_linear_q_ml_smoke(steps=steps, lr=lr, seed=seed)
-                self._send_json({
-                    "ok": True,
-                    "passed": result.improvement > 0,
-                    "steps": result.steps,
-                    "initial_loss": result.initial_loss,
-                    "final_loss": result.final_loss,
-                    "improvement": result.improvement,
-                })
+                self._send_json(
+                    {
+                        "ok": True,
+                        "passed": result.improvement > 0,
+                        "steps": result.steps,
+                        "initial_loss": result.initial_loss,
+                        "final_loss": result.final_loss,
+                        "improvement": result.improvement,
+                    }
+                )
             except Exception as exc:  # noqa: BLE001
                 self._send_json({"ok": False, "error": str(exc)}, status=500)
 
@@ -546,7 +599,9 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             body = self._read_json_body()
             with state.lock:
                 if state.collect_job is not None and state.collect_job.thread.is_alive():
-                    self._send_json({"ok": False, "error": "collection already running"}, status=409)
+                    self._send_json(
+                        {"ok": False, "error": "collection already running"}, status=409
+                    )
                     return
                 run_name = str(body.get("experiment") or f"{state.config.game.name}_random")
                 episodes = int(body.get("episodes") or 5)
@@ -583,12 +638,16 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             body = self._read_json_body()
             with state.lock:
                 if state.world_job is not None and state.world_job.thread.is_alive():
-                    self._send_json({"ok": False, "error": "world model training already running"}, status=409)
+                    self._send_json(
+                        {"ok": False, "error": "world model training already running"}, status=409
+                    )
                     return
                 run_name = str(body.get("experiment") or f"{state.experiment}_world")
                 steps = int(body.get("steps") or 1000)
                 collect_steps_val = body.get("collect_steps")
-                collect_steps = int(collect_steps_val) if collect_steps_val not in (None, "") else None
+                collect_steps = (
+                    int(collect_steps_val) if collect_steps_val not in (None, "") else None
+                )
                 batch_size_val = body.get("batch_size")
                 batch_size = int(batch_size_val) if batch_size_val not in (None, "") else None
                 lr_val = body.get("lr")
@@ -605,7 +664,17 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     stop_event=stop_event,
                     thread=threading.Thread(
                         target=_train_world_worker,
-                        args=(state, run_name, steps, collect_steps, batch_size, lr, dashboard_every, headed, stop_event),
+                        args=(
+                            state,
+                            run_name,
+                            steps,
+                            collect_steps,
+                            batch_size,
+                            lr,
+                            dashboard_every,
+                            headed,
+                            stop_event,
+                        ),
                         daemon=True,
                     ),
                 )
@@ -637,7 +706,9 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 return
             with state.lock:
                 if state.job is not None and state.job.thread.is_alive():
-                    self._send_json({"ok": False, "error": "cannot switch config while training"}, status=409)
+                    self._send_json(
+                        {"ok": False, "error": "cannot switch config while training"}, status=409
+                    )
                     return
                 state.config = new_config
                 state.config_path = new_path
@@ -651,7 +722,9 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 return
             with state.lock:
                 if state.job is not None and state.job.thread.is_alive():
-                    self._send_json({"ok": False, "error": "cannot update config while training"}, status=409)
+                    self._send_json(
+                        {"ok": False, "error": "cannot update config while training"}, status=409
+                    )
                     return
                 try:
                     new_config = state.config
@@ -673,7 +746,10 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 self._send_json({"ok": False, "error": "name required"}, status=400)
                 return
             if not name.replace("_", "").replace("-", "").isalnum():
-                self._send_json({"ok": False, "error": "name must be alphanumeric (dashes/underscores ok)"}, status=400)
+                self._send_json(
+                    {"ok": False, "error": "name must be alphanumeric (dashes/underscores ok)"},
+                    status=400,
+                )
                 return
             config_dir = Path("configs/games")
             config_dir.mkdir(parents=True, exist_ok=True)
@@ -682,6 +758,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 self._send_json({"ok": False, "error": "config already exists"}, status=409)
                 return
             import yaml
+
             with state.lock, target.open("w", encoding="utf-8") as handle:
                 yaml.dump(
                     {"game": state.config.game.name},
@@ -700,9 +777,12 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 if state.job is not None and state.job.thread.is_alive():
                     run_dir_name = state.job.run_dir.name if state.job.run_dir else ""
                     if run_dir_name == name:
-                        self._send_json({"ok": False, "error": "cannot delete active training run"}, status=409)
+                        self._send_json(
+                            {"ok": False, "error": "cannot delete active training run"}, status=409
+                        )
                         return
             import shutil
+
             output_dir = Path(state.config.experiment.output_dir)
             run_dir = output_dir / name
             if not run_dir.is_dir():
@@ -738,14 +818,6 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             payload = json.dumps(data).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def _send_html(self, html: str) -> None:
-            payload = html.encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -789,7 +861,14 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 detail = []
             summary = _read_json(run_dir / "metrics" / "train_summary.json")
             algo = str(summary.get("algorithm", ""))
-            self._send_json({"detail": detail, "summary": summary, "checkpoints": _list_checkpoints(run_dir, algorithm=algo), "run_dir": str(run_dir)})
+            self._send_json(
+                {
+                    "detail": detail,
+                    "summary": summary,
+                    "checkpoints": _list_checkpoints(run_dir, algorithm=algo),
+                    "run_dir": str(run_dir),
+                }
+            )
 
     return TrainingUiHandler
 
@@ -837,13 +916,24 @@ def _training_worker(
             from jepa_rl.training.frozen_jepa_dqn import train_frozen_jepa_dqn
 
             if jepa_checkpoint is None:
-                jepa_ckpt_cfg = state.config.training.extra.get("jepa_checkpoint") if hasattr(state.config.training, "extra") else None
+                jepa_ckpt_cfg = (
+                    state.config.training.extra.get("jepa_checkpoint")
+                    if hasattr(state.config.training, "extra")
+                    else None
+                )
                 if jepa_ckpt_cfg:
                     jepa_checkpoint = Path(jepa_ckpt_cfg)
                 else:
-                    candidates = sorted(Path(state.config.experiment.output_dir).glob("*_world/checkpoints/latest.pt"), reverse=True)
+                    candidates = sorted(
+                        Path(state.config.experiment.output_dir).glob(
+                            "*_world/checkpoints/latest.pt"
+                        ),
+                        reverse=True,
+                    )
                     if not candidates:
-                        raise ValueError("No JEPA checkpoint found. Run train-world first or provide a JEPA checkpoint path.")
+                        raise ValueError(
+                            "No JEPA checkpoint found. Run train-world first or provide a JEPA checkpoint path."
+                        )
                     jepa_checkpoint = candidates[0]
             train_frozen_jepa_dqn(
                 state.config,
@@ -931,14 +1021,22 @@ def _collect_random_worker(
                     score = result.score
                     if result.done:
                         break
-                record: dict[str, Any] = {"type": "episode", "episode": episode, "return": episode_return, "score": score, "steps": steps_taken}
+                record: dict[str, Any] = {
+                    "type": "episode",
+                    "episode": episode,
+                    "return": episode_return,
+                    "score": score,
+                    "steps": steps_taken,
+                }
                 metrics.write(json.dumps(record) + "\n")
                 episodes_data.append(record)
                 with state.lock:
                     if state.collect_job is not None:
                         state.collect_job.episodes_done = episode + 1
                         scores_so_far = [e["score"] for e in episodes_data]
-                        state.collect_job.mean_score = float(sum(scores_so_far) / len(scores_so_far))
+                        state.collect_job.mean_score = float(
+                            sum(scores_so_far) / len(scores_so_far)
+                        )
     except Exception as exc:  # noqa: BLE001
         with state.lock:
             if state.collect_job is not None:
@@ -1030,7 +1128,9 @@ _CONFIG_GROUPS: dict[str, type] = {
 }
 
 
-def _apply_config_override(config: ProjectConfig, group: str, key: str, value: str) -> ProjectConfig:
+def _apply_config_override(
+    config: ProjectConfig, group: str, key: str, value: str
+) -> ProjectConfig:
     group_map = {
         "experiment": config.experiment,
         "game": config.game,
@@ -1078,6 +1178,8 @@ def list_configs() -> dict[str, Any]:
 
 
 def list_runs(state: UiState, include_smoke: bool = False) -> dict[str, Any]:
+    import yaml
+
     output_dir = Path(state.config.experiment.output_dir)
     runs: list[dict[str, Any]] = []
     if output_dir.is_dir():
@@ -1088,15 +1190,25 @@ def list_runs(state: UiState, include_smoke: bool = False) -> dict[str, Any]:
                 is_smoke = algo == "linear_q" or "smoke" in child.name.lower()
                 if is_smoke and not include_smoke:
                     continue
-                runs.append({
-                    "name": child.name,
-                    "steps": summary.get("steps"),
-                    "episodes": summary.get("episodes"),
-                    "best_score": summary.get("best_score"),
-                    "algorithm": algo,
-                    "checkpoints": _list_checkpoints(child, algorithm=algo),
-                    "is_smoke": is_smoke,
-                })
+                experiment_name = ""
+                try:
+                    with (child / "config.yaml").open("r", encoding="utf-8") as f:
+                        cfg = yaml.safe_load(f)
+                    experiment_name = (cfg or {}).get("experiment", {}).get("name", "")
+                except Exception:
+                    pass
+                runs.append(
+                    {
+                        "name": child.name,
+                        "experiment_name": experiment_name or child.name,
+                        "steps": summary.get("steps"),
+                        "episodes": summary.get("episodes"),
+                        "best_score": summary.get("best_score"),
+                        "algorithm": algo,
+                        "checkpoints": _list_checkpoints(child, algorithm=algo),
+                        "is_smoke": is_smoke,
+                    }
+                )
     return {"runs": runs}
 
 
@@ -1121,6 +1233,17 @@ def _list_checkpoints(run_dir: Path, algorithm: str | None = None) -> list[dict[
     return result
 
 
+_GAME_DESCRIPTIONS: dict[str, str] = {
+    "breakout": "Destroy bricks with a bouncing ball. Don't let it fall!",
+    "snake": "Eat food to grow longer. Avoid walls and yourself!",
+    "asteroids": "Shoot asteroids. Tough ones shrink when hit. Slimy ones spread moss that shields and regenerates. Collect power-ups!",
+}
+
+
+def _game_description(name: str) -> str:
+    return _GAME_DESCRIPTIONS.get(name, "")
+
+
 def _build_config_detail(config: ProjectConfig) -> list[dict[str, Any]]:
     # Field format: (key, value, tooltip, meta_dict)
     # meta_dict keys: type ("text","number","select","bool","readonly"), options, min, max, step
@@ -1129,49 +1252,124 @@ def _build_config_detail(config: ProjectConfig) -> list[dict[str, Any]]:
             "title": "experiment",
             "fields": [
                 ("name", config.experiment.name, "Run identifier", {"type": "text"}),
-                ("device", config.experiment.device, "Compute device", {"type": "select", "options": ["cpu", "auto", "mps", "cuda"]}),
-                ("precision", config.experiment.precision, "Numeric precision", {"type": "select", "options": ["fp32", "fp16", "bf16"]}),
+                (
+                    "device",
+                    config.experiment.device,
+                    "Compute device",
+                    {"type": "select", "options": ["cpu", "auto", "mps", "cuda"]},
+                ),
+                (
+                    "precision",
+                    config.experiment.precision,
+                    "Numeric precision",
+                    {"type": "select", "options": ["fp32", "fp16", "bf16"]},
+                ),
                 ("seed", config.experiment.seed, "Random seed", {"type": "number", "min": 0}),
             ],
         },
         {
             "title": "agent",
             "fields": [
-                ("algorithm", config.agent.algorithm, "RL algorithm", {"type": "select", "options": ["dqn", "frozen_jepa_dqn", "linear_q"]}),
-                ("gamma", config.agent.gamma, "Discount factor", {"type": "number", "min": 0, "max": 1, "step": 0.001}),
+                (
+                    "algorithm",
+                    config.agent.algorithm,
+                    "RL algorithm",
+                    {"type": "select", "options": ["dqn", "frozen_jepa_dqn", "linear_q"]},
+                ),
+                (
+                    "gamma",
+                    config.agent.gamma,
+                    "Discount factor",
+                    {"type": "number", "min": 0, "max": 1, "step": 0.001},
+                ),
                 ("n_step", config.agent.n_step, "N-step return", {"type": "number", "min": 1}),
                 ("batch_size", config.agent.batch_size, "Batch size", {"type": "number", "min": 1}),
-                ("learning_starts", config.agent.learning_starts, "Steps before learning", {"type": "number", "min": 0}),
-                ("train_every", config.agent.train_every, "Train every N steps", {"type": "number", "min": 1}),
-                ("target_update_interval", config.agent.target_update_interval, "Target sync interval", {"type": "number", "min": 1}),
+                (
+                    "learning_starts",
+                    config.agent.learning_starts,
+                    "Steps before learning",
+                    {"type": "number", "min": 0},
+                ),
+                (
+                    "train_every",
+                    config.agent.train_every,
+                    "Train every N steps",
+                    {"type": "number", "min": 1},
+                ),
+                (
+                    "target_update_interval",
+                    config.agent.target_update_interval,
+                    "Target sync interval",
+                    {"type": "number", "min": 1},
+                ),
             ],
         },
         {
             "title": "exploration",
             "fields": [
-                ("epsilon_start", config.exploration.epsilon_start, "Initial epsilon", {"type": "number", "min": 0, "max": 1, "step": 0.01}),
-                ("epsilon_end", config.exploration.epsilon_end, "Final epsilon", {"type": "number", "min": 0, "max": 1, "step": 0.01}),
-                ("epsilon_decay_steps", config.exploration.epsilon_decay_steps, "Decay steps", {"type": "number", "min": 1}),
+                (
+                    "epsilon_start",
+                    config.exploration.epsilon_start,
+                    "Initial epsilon",
+                    {"type": "number", "min": 0, "max": 1, "step": 0.01},
+                ),
+                (
+                    "epsilon_end",
+                    config.exploration.epsilon_end,
+                    "Final epsilon",
+                    {"type": "number", "min": 0, "max": 1, "step": 0.01},
+                ),
+                (
+                    "epsilon_decay_steps",
+                    config.exploration.epsilon_decay_steps,
+                    "Decay steps",
+                    {"type": "number", "min": 1},
+                ),
             ],
         },
         {
             "title": "replay",
             "fields": [
-                ("capacity", config.replay.capacity, "Buffer capacity", {"type": "number", "min": 100}),
+                (
+                    "capacity",
+                    config.replay.capacity,
+                    "Buffer capacity",
+                    {"type": "number", "min": 100},
+                ),
                 ("prioritized", config.replay.prioritized, "Prioritized replay", {"type": "bool"}),
-                ("sequence_length", config.replay.sequence_length, "Sequence length", {"type": "number", "min": 1}),
+                (
+                    "sequence_length",
+                    config.replay.sequence_length,
+                    "Sequence length",
+                    {"type": "number", "min": 1},
+                ),
             ],
         },
         {
             "title": "world_model",
             "fields": [
                 ("enabled", config.world_model.enabled, "Use JEPA world model", {"type": "bool"}),
-                ("latent_dim", config.world_model.latent_dim, "Latent dim", {"type": "number", "min": 1}),
+                (
+                    "latent_dim",
+                    config.world_model.latent_dim,
+                    "Latent dim",
+                    {"type": "number", "min": 1},
+                ),
                 ("encoder", config.world_model.encoder.type, "Encoder", {"type": "readonly"}),
                 ("predictor", config.world_model.predictor.type, "Predictor", {"type": "readonly"}),
-                ("horizons", list(config.world_model.predictor.horizons), "Horizons", {"type": "readonly"}),
+                (
+                    "horizons",
+                    list(config.world_model.predictor.horizons),
+                    "Horizons",
+                    {"type": "readonly"},
+                ),
                 ("loss", config.world_model.loss.prediction, "Loss function", {"type": "readonly"}),
-                ("ema_tau", f"{config.world_model.target_encoder.ema_tau_start}–{config.world_model.target_encoder.ema_tau_end}", "EMA tau schedule", {"type": "readonly"}),
+                (
+                    "ema_tau",
+                    f"{config.world_model.target_encoder.ema_tau_start}–{config.world_model.target_encoder.ema_tau_end}",
+                    "EMA tau schedule",
+                    {"type": "readonly"},
+                ),
             ],
         },
     ]
@@ -1218,6 +1416,7 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
             eval_payload = {
                 "status": eval_job.status,
                 "run_name": eval_job.run_name,
+                "checkpoint_name": eval_job.checkpoint_name,
                 "running": eval_job.status == "running",
                 "episode_count": eval_job.episode_count,
                 "episodes_target": eval_job.episodes_target,
@@ -1252,9 +1451,7 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
 
     if live_step_events:
         merged_by_step = {
-            int(event["step"]): event
-            for event in step_events
-            if isinstance(event.get("step"), int)
+            int(event["step"]): event for event in step_events if isinstance(event.get("step"), int)
         }
         for event in live_step_events:
             if isinstance(event.get("step"), int):
@@ -1293,6 +1490,7 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
             ("frame stack", state.config.observation.frame_stack),
             ("actions", ", ".join(state.config.actions.keys)),
             ("max steps", state.config.game.max_steps_per_episode),
+            ("description", _game_description(state.config.game.name)),
         ],
         "config_detail": _build_config_detail(state.config),
         "job": job_payload,
@@ -1307,1448 +1505,6 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
     return payload
 
 
-def render_ui_html(state: UiState) -> str:
-    run_name = state.run_dir.name
-    default_steps = state.default_steps
-    learning_starts = state.learning_starts
-    batch_size = "" if state.batch_size is None else str(state.batch_size)
-
-    return f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>jepa-rl — {run_name}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-      :root {{
-        color-scheme: dark;
-        --bg: #0f0e0c;
-        --surface: #171613;
-        --surface-2: #1e1d19;
-        --border: #2a2822;
-        --text: #ddd8cf;
-        --muted: #7d7870;
-        --accent: #c49152;
-        --green: #5d9e5d;
-        --red: #b9524c;
-        --blue: #4e89ba;
-        --yellow: #bfa03e;
-      }}
-      * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-      body {{
-        background: var(--bg);
-        color: var(--text);
-        font-family: 'Outfit', system-ui, sans-serif;
-        font-size: 13px;
-        line-height: 1.45;
-        overflow: hidden;
-        height: 100vh;
-      }}
-      header {{
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 8px 14px;
-        border-bottom: 1px solid var(--border);
-        flex-shrink: 0;
-      }}
-      .brand {{
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color: var(--accent);
-      }}
-      .sep {{
-        width: 1px;
-        height: 14px;
-        background: var(--border);
-      }}
-      .run-name {{
-        font-size: 13px;
-        font-weight: 500;
-      }}
-      .header-status {{
-        margin-left: auto;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 10px;
-        color: var(--muted);
-      }}
-      .controls-bar {{
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        flex-wrap: wrap;
-        padding: 5px 14px;
-        border-bottom: 1px solid var(--border);
-        background: var(--surface);
-        flex-shrink: 0;
-      }}
-      .controls-bar .field {{
-        display: flex;
-        align-items: center;
-        gap: 3px;
-        font-size: 9px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted);
-      }}
-      .controls-bar input, .controls-bar select {{
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 3px 6px;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 11px;
-        width: 60px;
-      }}
-      .controls-bar select {{
-        width: auto;
-        min-width: 90px;
-        max-width: 150px;
-      }}
-      .controls-bar button {{
-        background: transparent;
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 3px 10px;
-        font-family: 'Outfit', sans-serif;
-        font-size: 11px;
-        font-weight: 500;
-        cursor: pointer;
-      }}
-      .btn-accent {{
-        color: var(--accent) !important;
-        border-color: rgba(196,145,82,0.4) !important;
-      }}
-      .btn-danger {{
-        color: var(--red) !important;
-        border-color: rgba(185,82,76,0.4) !important;
-      }}
-      .hidden {{ display: none !important; }}
-      .run-info-bar {{
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 5px 10px;
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        flex-shrink: 0;
-        font-size: 10px;
-      }}
-      .rib-dot {{
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        flex-shrink: 0;
-      }}
-      .rib-dot.idle {{ background: var(--muted); }}
-      .rib-dot.running {{ background: #5d9e5d; animation: pulse 1.5s infinite; }}
-      .rib-dot.evaluating {{ background: var(--accent); animation: pulse 1.5s infinite; }}
-      .rib-dot.stopped {{ background: var(--muted); }}
-      .rib-dot.error {{ background: var(--red); }}
-      .rib-status {{
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-size: 9px;
-      }}
-      .rib-detail {{
-        color: var(--muted);
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 9px;
-      }}
-      .cg-ckpt {{
-        display: flex;
-        align-items: center;
-        gap: 5px;
-      }}
-      .cg-ckpt-label {{
-        font-size: 9px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted);
-        flex-shrink: 0;
-      }}
-      .cg-ckpt select {{
-        flex: 1;
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 2px 4px;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 10px;
-      }}
-      @keyframes pulse {{
-        0%, 100% {{ opacity: 1; }}
-        50% {{ opacity: 0.4; }}
-      }}
-      main {{
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
-        gap: 10px;
-        padding: 10px 14px;
-        height: calc(100vh - 76px);
-        overflow: hidden;
-      }}
-      .col {{
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        min-width: 0;
-        min-height: 0;
-        overflow-y: auto;
-        overflow-x: hidden;
-      }}
-      .col::-webkit-scrollbar {{ width: 4px; }}
-      .col::-webkit-scrollbar-track {{ background: transparent; }}
-      .col::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 2px; }}
-      .game-section {{
-        border: 1px solid var(--border);
-        border-radius: 3px;
-        overflow: hidden;
-        background: #08080a;
-        flex-shrink: 0;
-      }}
-      .game-header {{
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 5px 10px;
-        background: var(--surface);
-        border-bottom: 1px solid var(--border);
-      }}
-      .gh-title {{
-        font-size: 9px;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-      }}
-      .gh-status {{
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 10px;
-        color: var(--text);
-      }}
-      .gh-stat {{
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 10px;
-        color: var(--muted);
-        margin-left: auto;
-      }}
-      .gh-stat strong {{ color: var(--text); }}
-      .game-body {{
-        width: 100%;
-      }}
-      .game-body iframe {{
-        width: 100%;
-        aspect-ratio: 4 / 3;
-        border: none;
-        display: block;
-        overflow: hidden;
-      }}
-      .game-body iframe::-webkit-scrollbar {{ display: none; }}
-      .train-frame {{
-        width: 100%;
-        aspect-ratio: 4 / 3;
-        display: none;
-        object-fit: contain;
-        background: #08080a;
-        image-rendering: auto;
-      }}
-      .game-section.training .train-frame {{ display: none; }}
-      .game-section.training .game-body {{ display: block; }}
-      .game-section.training .game-controls {{ display: none; }}
-      .game-section.evaluating .game-controls {{ display: none; }}
-      .game-controls {{
-        display: flex;
-        gap: 4px;
-        padding: 5px 10px;
-        background: var(--surface);
-        border-top: 1px solid var(--border);
-        justify-content: center;
-      }}
-      .game-controls button {{
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 3px 12px;
-        font-family: 'Outfit', sans-serif;
-        font-size: 11px;
-        font-weight: 500;
-        cursor: pointer;
-      }}
-      .game-controls button:active {{
-        background: var(--surface-2);
-      }}
-      .game-controls .ctrl-label {{
-        font-size: 9px;
-        color: var(--muted);
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        align-self: center;
-        margin-right: 4px;
-      }}
-      .settings-table {{
-        display: grid;
-        grid-template-columns: auto 1fr;
-        gap: 1px 10px;
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        padding: 5px 8px;
-        font-size: 10px;
-      }}
-      .settings-table .sk {{
-        color: var(--muted);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        font-size: 8px;
-        font-weight: 500;
-      }}
-      .settings-table .sv {{
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 10px;
-        color: var(--text);
-      }}
-      .metrics {{
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 1px;
-        background: var(--border);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        overflow: hidden;
-      }}
-      .metric {{
-        background: var(--surface);
-        padding: 5px 6px;
-      }}
-      .m-label {{
-        font-size: 8px;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.07em;
-        color: var(--muted);
-        white-space: nowrap;
-      }}
-      .m-val {{
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 12px;
-        font-weight: 500;
-        font-variant-numeric: tabular-nums;
-        margin-top: 1px;
-      }}
-      .charts {{
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-      }}
-      .chart-panel {{
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        overflow: hidden;
-        background: var(--surface);
-      }}
-      .section-label {{
-        font-size: 8px;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-        padding: 4px 8px 0;
-      }}
-      .section-header {{
-        font-size: 8px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        color: var(--accent);
-        padding: 5px 8px;
-        border-bottom: 1px solid var(--border);
-        background: var(--surface);
-        flex-shrink: 0;
-      }}
-      canvas {{
-        display: block;
-        width: 100%;
-        height: 80px;
-      }}
-      .run-select {{
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        padding: 5px 8px;
-        flex-shrink: 0;
-      }}
-      .run-select select {{
-        width: 100%;
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 4px 6px;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 11px;
-      }}
-      .train-controls {{
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        background: var(--surface);
-        flex-shrink: 0;
-      }}
-      .tc-row {{
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        padding: 5px 8px;
-        flex-wrap: wrap;
-      }}
-      .tc-row .field {{
-        display: flex;
-        align-items: center;
-        gap: 3px;
-        font-size: 9px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted);
-      }}
-      .tc-row input {{
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 3px 5px;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 11px;
-        width: 52px;
-      }}
-      .tc-actions {{
-        border-top: 1px solid var(--border);
-        gap: 4px;
-      }}
-      .tc-actions button {{
-        background: transparent;
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 3px 10px;
-        font-family: 'Outfit', sans-serif;
-        font-size: 11px;
-        font-weight: 500;
-        cursor: pointer;
-      }}
-      .config-panel {{
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        overflow: hidden;
-        background: var(--surface);
-        flex-shrink: 0;
-      }}
-      .config-panel .section-header {{
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-      }}
-      .cfg-apply-btn {{
-        background: transparent;
-        border: 1px solid rgba(196,145,82,0.4);
-        border-radius: 2px;
-        color: var(--accent);
-        padding: 1px 8px;
-        font-family: 'Outfit', sans-serif;
-        font-size: 9px;
-        font-weight: 500;
-        cursor: pointer;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }}
-      .cfg-input {{
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 1px 4px;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 9px;
-        width: 100%;
-        max-width: 160px;
-        text-align: right;
-      }}
-      .cfg-input:focus {{
-        outline: none;
-        border-color: var(--accent);
-      }}
-      .cfg-select {{
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 1px 2px;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 9px;
-        width: 100%;
-        max-width: 160px;
-        text-align: right;
-        cursor: pointer;
-        appearance: none;
-        -webkit-appearance: none;
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%237a7a7a'/%3E%3C/svg%3E");
-        background-repeat: no-repeat;
-        background-position: right 4px center;
-        padding-right: 14px;
-      }}
-      .cfg-select:focus {{
-        outline: none;
-        border-color: var(--accent);
-      }}
-      .cfg-checkbox {{
-        accent-color: var(--accent);
-        cursor: pointer;
-        margin-left: auto;
-      }}
-      .cfg-row {{
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 2px 0;
-        gap: 6px;
-      }}
-      .cfg-key {{
-        font-size: 9px;
-        color: var(--muted);
-        cursor: help;
-        flex-shrink: 0;
-        white-space: nowrap;
-      }}
-      .cfg-val {{
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 9px;
-        color: var(--text);
-      }}
-      .run-detail {{
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        overflow: hidden;
-        background: var(--surface);
-      }}
-      .run-summary {{
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 1px;
-        background: var(--border);
-        padding: 0;
-      }}
-      .run-summary .rs-item {{
-        padding: 4px 8px;
-        background: var(--surface);
-      }}
-      .run-summary .rs-label {{
-        font-size: 8px;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--muted);
-        font-weight: 500;
-      }}
-      .run-summary .rs-val {{
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 11px;
-        font-variant-numeric: tabular-nums;
-      }}
-      .run-config {{
-        max-height: none;
-        overflow-y: auto;
-        border-top: 1px solid var(--border);
-        padding: 4px 8px;
-      }}
-      .run-config::-webkit-scrollbar {{ width: 3px; }}
-      .run-config::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 2px; }}
-      .cfg-group-title {{
-        font-size: 8px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        color: var(--accent);
-        margin-top: 6px;
-        margin-bottom: 2px;
-        cursor: pointer;
-        user-select: none;
-      }}
-      .cfg-group-title::before {{
-        content: '\\25BE ';
-      }}
-      .cfg-collapsed .cfg-group-title::before {{
-        content: '\\25B8 ';
-      }}
-      .cfg-collapsed .cfg-fields {{
-        display: none;
-      }}
-      .cfg-group:first-child .cfg-group-title {{ margin-top: 0; }}
-      .checkpoint-bar {{
-        display: flex;
-        gap: 4px;
-        padding: 4px 8px;
-        border-top: 1px solid var(--border);
-        align-items: center;
-        font-size: 9px;
-        color: var(--muted);
-      }}
-      .checkpoint-bar select {{
-        flex: 1;
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 2px 4px;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 10px;
-      }}
-      .checkpoint-bar button {{
-        background: transparent;
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        color: var(--text);
-        padding: 2px 8px;
-        font-family: 'Outfit', sans-serif;
-        font-size: 10px;
-        cursor: pointer;
-      }}
-      .episodes-section {{
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        overflow: hidden;
-        flex: 1;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-      }}
-      table {{
-        width: 100%;
-        border-collapse: collapse;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 10px;
-      }}
-      th, td {{
-        padding: 3px 6px;
-        text-align: right;
-        border-bottom: 1px solid var(--border);
-      }}
-      th:first-child, td:first-child {{ text-align: left; }}
-      th {{
-        background: var(--surface);
-        font-family: 'Outfit', sans-serif;
-        font-weight: 500;
-        font-size: 8px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted);
-        position: sticky;
-        top: 0;
-        z-index: 1;
-      }}
-      .episodes-scroll {{
-        overflow-y: auto;
-        flex: 1;
-      }}
-      .episodes-scroll::-webkit-scrollbar {{ width: 4px; }}
-      .episodes-scroll::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 2px; }}
-      @media (max-width: 900px) {{
-        main {{ grid-template-columns: 1fr 1fr; }}
-        .col-right {{ display: none; }}
-      }}
-      @media (max-width: 600px) {{
-        main {{ grid-template-columns: 1fr; height: auto; overflow-y: auto; }}
-        body {{ overflow: auto; }}
-        .col-left {{ display: none; }}
-      }}
-    </style>
-  </head>
-  <body>
-    <header>
-      <span class="brand" title="JEPA-RL: Joint-Embedding Predictive Architecture for Reinforcement Learning">jepa-rl</span>
-      <span class="sep"></span>
-      <span class="run-name" title="Current active run directory">{run_name}</span>
-      <span class="header-status" id="headerStatus"></span>
-    </header>
-    <div class="controls-bar">
-      <div class="field" title="Select a game configuration to load">game <select id="f-config" title="Available game configs in configs/games/"><option value="">loading...</option></select></div>
-      <button onclick="createConfig()" title="Create a new game config from current settings" style="background:transparent;border:1px solid var(--border);border-radius:2px;color:var(--muted);padding:2px 8px;font-size:10px;cursor:pointer;font-family:'Outfit',sans-serif;">+ new config</button>
-    </div>
-    <main>
-      <div class="col col-left">
-        <div class="metrics" id="metrics" title="Live training metrics updated every refresh"></div>
-        <div class="charts">
-          <div class="chart-panel" title="Game score over time"><div class="section-label">score</div><canvas id="scoreChart"></canvas></div>
-          <div class="chart-panel" title="Training loss (smooth L1) over time"><div class="section-label">loss</div><canvas id="lossChart"></canvas></div>
-          <div class="chart-panel" title="Exploration rate (epsilon) over time"><div class="section-label">epsilon</div><canvas id="epsilonChart"></canvas></div>
-          <div class="chart-panel" title="Temporal difference error over time"><div class="section-label">td error</div><canvas id="tdChart"></canvas></div>
-        </div>
-      </div>
-      <div class="col col-center">
-        <div class="game-section" id="gameSection">
-          <div class="game-header">
-            <span class="gh-title" id="gameTitle" title="Current view mode">game view</span>
-            <span class="gh-status" id="gameStatus" title="Current game or training status">manual play</span>
-            <span class="gh-stat" id="gameStats" title="Live score and lives from the game"></span>
-            <button onclick="toggleGame()" title="Show/hide the game view" style="background:transparent;border:1px solid var(--border);border-radius:2px;color:var(--muted);padding:2px 8px;font-size:10px;cursor:pointer;font-family:'Outfit',sans-serif;">hide</button>
-          </div>
-          <div class="game-body">
-            <iframe id="game" src="/game?embed" scrolling="no" style="overflow:hidden;" title="Game canvas"></iframe>
-          </div>
-          <img class="train-frame" id="trainFrame" alt="training view" title="Live training screenshot" />
-          <div class="game-controls">
-            <span class="ctrl-label">play</span>
-            <button onclick="gameAction('left')" title="Send ArrowLeft key to the game">&#9664; left</button>
-            <button onclick="gameAction('space')" title="Send Space key (serve ball)">serve</button>
-            <button onclick="gameAction('right')" title="Send ArrowRight key to the game">right &#9654;</button>
-            <button onclick="gameAction('reset')" title="Send R key to reset the game">reset</button>
-          </div>
-        </div>
-        <div class="settings-table" id="gameSettings" title="Game configuration settings for the active config"></div>
-      </div>
-      <div class="col col-right">
-        <div class="run-select">
-          <select id="f-run" onchange="loadRunDetail()" title="Select a past training run to view its details. Leave unselected to configure a new run."><option value="">select run...</option></select>
-          <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
-            <label style="font-size:9px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:3px;"><input type="checkbox" id="chkSmoke" onchange="loadRuns()" style="accent-color:var(--accent)"> show smoke</label>
-            <button onclick="deleteSelectedRun()" id="btnDeleteRun" class="hidden" title="Delete the selected run and all its data" style="background:transparent;border:1px solid rgba(185,82,76,0.4);border-radius:2px;color:var(--red);padding:2px 8px;font-size:9px;cursor:pointer;font-family:'Outfit',sans-serif;margin-left:auto;">delete</button>
-          </div>
-        </div>
-        <div class="run-info-bar" id="runInfoBar" title="Current run status and key metrics">
-          <span class="rib-dot idle" id="ribDot"></span>
-          <span class="rib-status" id="ribStatus">idle</span>
-          <span class="rib-detail" id="ribDetail"></span>
-        </div>
-        <div class="train-controls" id="controlGroup">
-          <div class="tc-row">
-            <div class="field" title="Name for the new training run (creates runs/&lt;name&gt;/)">name <input id="f-run-name" type="text" value="ui_train" style="width:80px" title="Run name for new training"></div>
-            <div class="field" title="Total environment steps for this training run">steps <input id="f-steps" type="number" value="{default_steps}" min="1" title="Number of game steps to train"></div>
-            <div class="field" title="Steps before model updates begin (fills replay buffer first)">warmup <input id="f-ls" type="number" value="{learning_starts}" min="0" title="Warmup steps before learning starts"></div>
-          </div>
-          <div class="tc-row">
-            <div class="field" title="Minibatch size for gradient updates (leave empty for config default)">batch <input id="f-bs" type="number" value="{batch_size}" min="1" placeholder="auto" title="Batch size override"></div>
-            <div class="field" title="Rewrite dashboard every N steps">log&nbsp;every <input id="f-de" type="number" value="5" min="1" title="Dashboard write interval"></div>
-          </div>
-          <div class="tc-row cg-ckpt" id="ckptRow" style="display:none">
-            <span class="cg-ckpt-label">checkpoint</span>
-            <select id="f-checkpoint" title="Available model checkpoints for this run"></select>
-          </div>
-          <div class="tc-row tc-actions">
-            <button onclick="startTraining()" id="btnTrain" class="btn-accent" title="Start training with the current config and parameters above">train</button>
-            <button onclick="watchAiPlay()" id="btnWatch" class="btn-accent hidden" title="Watch the AI play using the selected checkpoint">watch AI play</button>
-            <button onclick="stopTraining()" id="btnStop" class="btn-danger hidden" title="Stop the running training or evaluation job">stop</button>
-          </div>
-        </div>
-        <div class="config-panel" id="configPanel">
-          <div class="section-header" title="All config parameters for the active game. Edit values and they apply on next training run.">config &nbsp;<button onclick="applyConfigEdits()" class="cfg-apply-btn" title="Apply edited config values now">apply</button></div>
-          <div class="run-config" id="runConfig"></div>
-        </div>
-        <section class="episodes-section">
-          <div class="section-header" title="Recent training episodes with their scores">episodes</div>
-          <div class="episodes-scroll">
-            <table>
-              <thead><tr><th>ep</th><th>step</th><th>return</th><th>score</th></tr></thead>
-              <tbody id="episodes"></tbody>
-            </table>
-          </div>
-        </section>
-      </div>
-    </main>
-    <script>
-      async function api(path, payload) {{
-        const res = await fetch(path, {{
-          method: "POST",
-          headers: {{ "Content-Type": "application/json" }},
-          body: JSON.stringify(payload || {{}}),
-        }});
-        const data = await res.json();
-        if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
-        return data;
-      }}
-
-      async function startTraining() {{
-        try {{
-          const expName = (document.getElementById("f-run-name").value || "ui_train").trim();
-          await api("/api/train/start", {{
-            experiment: expName,
-            steps: Number(document.getElementById("f-steps").value),
-            learning_starts: Number(document.getElementById("f-ls").value),
-            batch_size: document.getElementById("f-bs").value,
-            dashboard_every: Number(document.getElementById("f-de").value) || 5,
-          }});
-        }} catch (e) {{ setStatus(e.message); }}
-        refresh();
-        setTimeout(loadRuns, 500);
-      }}
-
-      async function stopTraining() {{
-        _stopAiPlay();
-        try {{ await api("/api/train/stop"); }} catch (e) {{ setStatus(e.message); }}
-        refresh();
-      }}
-
-      let _aiInterval = null;
-      let _aiTargetEpisodes = 3;
-      let _aiEpisodeCount = 0;
-
-      async function watchAiPlay() {{
-        const ckptSel = document.getElementById("f-checkpoint");
-        if (!ckptSel || !ckptSel.value) {{ setStatus("select a checkpoint first"); return; }}
-        const cg = document.getElementById("controlGroup");
-        const episodes = 3;
-        const payload = {{ episodes, checkpoint: ckptSel.value }};
-        if (cg && cg.dataset.runDir) payload.run_dir = cg.dataset.runDir;
-        try {{
-          await api("/api/eval/start", payload);
-        }} catch (e) {{ setStatus(e.message); return; }}
-        _aiTargetEpisodes = episodes;
-        _aiEpisodeCount = 0;
-        // Reset the game so we start fresh
-        const iframe = document.getElementById("game");
-        if (iframe) iframe.src = "/game?embed&ts=" + Date.now();
-        setTimeout(() => {{
-          _sendEpisodeStartKey();
-          _aiInterval = setInterval(_aiLoop, 150);
-          _updateEvalUi();
-          setStatus("AI playing live…");
-        }}, 1500);
-      }}
-
-      async function _aiLoop() {{
-        try {{
-          const iframe = document.getElementById("game");
-          if (!iframe) return;
-          const doc = iframe.contentDocument || iframe.contentWindow.document;
-          if (!doc || !doc.body) return;
-
-          const doneEl = doc.querySelector("#status[data-state='done']");
-          const isDone = !!doneEl;
-          const scoreEl = doc.getElementById("score");
-          const score = scoreEl ? (parseFloat(scoreEl.textContent) || 0) : 0;
-
-          const gameCanvas = doc.getElementById("game");
-          if (!gameCanvas || !gameCanvas.getContext) return;
-          const b64 = gameCanvas.toDataURL("image/png").split(",")[1];
-
-          const res = await fetch("/api/eval/step", {{
-            method: "POST",
-            headers: {{"Content-Type": "application/json"}},
-            body: JSON.stringify({{frame: b64, done: isDone, score}})
-          }});
-          if (!res.ok) return;
-          const data = await res.json();
-
-          if (data.error) {{
-            _stopAiPlay();
-            setStatus("eval error: " + data.error);
-            return;
-          }}
-
-          if (data.complete) {{
-            _stopAiPlay();
-            refresh();
-            return;
-          }}
-
-          if (isDone) {{
-            _aiEpisodeCount++;
-            _updateEvalUi();
-            // Reset game for next episode.
-            setTimeout(() => {{
-              iframe.src = "/game?embed&ts=" + Date.now();
-              setTimeout(_sendEpisodeStartKey, 500);
-            }}, 300);
-            return;
-          }}
-
-          if (data.action && data.action !== "noop") {{
-            _applyKeyAction(doc, data.action);
-          }}
-        }} catch(_) {{
-          // Network hiccup — skip frame
-        }}
-      }}
-
-      function _applyKeyAction(doc, actionStr) {{
-        if (!actionStr || actionStr === "noop") return;
-        const keyMap = {{"Space": " "}};
-        const keys = actionStr.split("+").map(k => ({{key: keyMap[k] || k, code: k === "Space" ? "Space" : k}}));
-        keys.forEach(({{key, code}}) => doc.dispatchEvent(new KeyboardEvent("keydown", {{key, code, bubbles: true}})));
-        setTimeout(() => keys.slice().reverse().forEach(({{key, code}}) => doc.dispatchEvent(new KeyboardEvent("keyup", {{key, code, bubbles: true}}))), 80);
-      }}
-
-      function _sendEpisodeStartKey() {{
-        const iframe = document.getElementById("game");
-        if (!iframe) return false;
-        const win = iframe.contentWindow;
-        const doc = iframe.contentDocument || (win && win.document);
-        if (!win || !doc || !doc.getElementById("game")) return false;
-        const key = "{state.config.game.reset_key}";
-        const normalized = key === "Space" ? {{key: " ", code: "Space"}} : {{key, code: key.length === 1 ? "Key" + key.toUpperCase() : key}};
-        win.dispatchEvent(new KeyboardEvent("keydown", {{key: normalized.key, code: normalized.code, bubbles: true, cancelable: true}}));
-        doc.dispatchEvent(new KeyboardEvent("keydown", {{key: normalized.key, code: normalized.code, bubbles: true, cancelable: true}}));
-        setTimeout(() => {{
-          win.dispatchEvent(new KeyboardEvent("keyup", {{key: normalized.key, code: normalized.code, bubbles: true, cancelable: true}}));
-          doc.dispatchEvent(new KeyboardEvent("keyup", {{key: normalized.key, code: normalized.code, bubbles: true, cancelable: true}}));
-        }}, 80);
-        return true;
-      }}
-
-      function _stopAiPlay() {{
-        if (_aiInterval !== null) {{ clearInterval(_aiInterval); _aiInterval = null; }}
-        fetch("/api/eval/stop", {{method: "POST"}}).catch(() => {{}});
-        _updateEvalUi();
-      }}
-
-      function _updateEvalUi() {{
-        const gameSection = document.getElementById("gameSection");
-        const gameTitleEl = document.getElementById("gameTitle");
-        const gameStatusEl = document.getElementById("gameStatus");
-        const isEval = _aiInterval !== null;
-        if (gameSection) {{
-          if (isEval) gameSection.classList.add("evaluating");
-          else gameSection.classList.remove("evaluating");
-        }}
-        if (gameTitleEl && isEval) gameTitleEl.textContent = "AI playing";
-        if (gameStatusEl && isEval) {{
-          gameStatusEl.textContent = "AI playing live · ep " + (_aiEpisodeCount + 1) + "/" + _aiTargetEpisodes;
-        }}
-        toggleButtons(isEval);
-      }}
-
-      function resetGame() {{
-        document.getElementById("game").src = "/game?embed&ts=" + Date.now();
-      }}
-
-      function toggleGame() {{
-        const section = document.getElementById("gameSection");
-        const body = section.querySelector(".game-body");
-        const controls = section.querySelector(".game-controls");
-        const btn = event.target;
-        if (body.style.display === "none") {{
-          body.style.display = "";
-          controls.style.display = "";
-          btn.textContent = "hide";
-        }} else {{
-          body.style.display = "none";
-          controls.style.display = "none";
-          btn.textContent = "show";
-        }}
-      }}
-
-      function gameAction(action) {{
-        const iframe = document.getElementById("game");
-        const doc = iframe.contentDocument || iframe.contentWindow.document;
-        if (!doc) return;
-        if (action === "left") {{
-          const kd = new KeyboardEvent("keydown", {{ key: "ArrowLeft", code: "ArrowLeft", bubbles: true }});
-          doc.dispatchEvent(kd); window.dispatchEvent(kd);
-          setTimeout(() => {{
-            const ku = new KeyboardEvent("keyup", {{ key: "ArrowLeft", code: "ArrowLeft", bubbles: true }});
-            doc.dispatchEvent(ku); window.dispatchEvent(ku);
-          }}, 120);
-        }} else if (action === "right") {{
-          const kd = new KeyboardEvent("keydown", {{ key: "ArrowRight", code: "ArrowRight", bubbles: true }});
-          doc.dispatchEvent(kd); window.dispatchEvent(kd);
-          setTimeout(() => {{
-            const ku = new KeyboardEvent("keyup", {{ key: "ArrowRight", code: "ArrowRight", bubbles: true }});
-            doc.dispatchEvent(ku); window.dispatchEvent(ku);
-          }}, 120);
-        }} else if (action === "space") {{
-          const kd = new KeyboardEvent("keydown", {{ key: " ", code: "Space", bubbles: true }});
-          doc.dispatchEvent(kd); window.dispatchEvent(kd);
-          setTimeout(() => {{
-            const ku = new KeyboardEvent("keyup", {{ key: " ", code: "Space", bubbles: true }});
-            doc.dispatchEvent(ku); window.dispatchEvent(ku);
-          }}, 120);
-        }} else if (action === "reset") {{
-          const kd = new KeyboardEvent("keydown", {{ key: "r", code: "KeyR", bubbles: true }});
-          doc.dispatchEvent(kd); window.dispatchEvent(kd);
-        }}
-      }}
-
-      function pollGameStats() {{
-        try {{
-          const iframe = document.getElementById("game");
-          const doc = iframe.contentDocument;
-          if (!doc) return;
-          const score = doc.getElementById("score");
-          const lives = doc.getElementById("lives");
-          const statsEl = document.getElementById("gameStats");
-          if (score && lives && statsEl) {{
-            statsEl.innerHTML = "score <strong>" + (score.textContent || "0") + "</strong> &nbsp; lives <strong>" + (lives.textContent || "3") + "</strong>";
-          }}
-        }} catch {{}}
-      }}
-
-      async function loadRuns() {{
-        try {{
-          const showSmoke = document.getElementById("chkSmoke") && document.getElementById("chkSmoke").checked;
-          const res = await fetch("/api/runs" + (showSmoke ? "?smoke=true" : ""));
-          const data = await res.json();
-          const select = document.getElementById("f-run");
-          const current = select.value;
-          select.innerHTML = '<option value="">select run...</option>';
-          (data.runs || []).forEach(r => {{
-            const opt = document.createElement("option");
-            opt.value = r.name;
-            const info = [r.name];
-            if (r.algorithm) info.push(r.algorithm);
-            if (r.best_score != null) info.push("best:" + fmt(r.best_score));
-            if (r.steps != null) info.push(r.steps + " steps");
-            opt.textContent = info.join(" \\u00b7 ");
-            select.appendChild(opt);
-          }});
-          if (current) select.value = current;
-          if (!select.value && (data.runs || []).length) select.selectedIndex = 0;
-          if (select.value) loadRunDetail();
-        }} catch {{}}
-      }}
-
-      async function loadRunDetail() {{
-        const name = document.getElementById("f-run").value;
-        const ckptRow = document.getElementById("ckptRow");
-        if (!name) {{
-          if (ckptRow) ckptRow.style.display = "none";
-          // Restore current game config
-          const stRes = await fetch("/api/state");
-          const stData = await stRes.json();
-          renderEditableConfig(stData.config_detail);
-          toggleButtons();
-          return;
-        }}
-        try {{
-          const res = await fetch("/api/run-detail?name=" + encodeURIComponent(name));
-          const data = await res.json();
-          const cg = document.getElementById("controlGroup");
-          if (cg && data.run_dir) cg.dataset.runDir = data.run_dir;
-
-          // Render run's config into config panel
-          if (data.detail) renderEditableConfig(data.detail);
-
-          // Checkpoints
-          const ckptSel = document.getElementById("f-checkpoint");
-          const prevCkpt = ckptSel ? ckptSel.value : "";
-          ckptSel.innerHTML = "";
-          (data.checkpoints || []).forEach(c => {{
-            const opt = document.createElement("option");
-            opt.value = c;
-            opt.textContent = c;
-            ckptSel.appendChild(opt);
-          }});
-          if (prevCkpt) ckptSel.value = prevCkpt;
-          if (ckptRow) ckptRow.style.display = (data.checkpoints || []).length ? "" : "none";
-          toggleButtons();
-        }} catch {{}}
-      }}
-
-      async function switchConfig() {{
-        const select = document.getElementById("f-config");
-        const path = select.value;
-        if (!path) return;
-        try {{
-          const res = await api("/api/switch-config", {{ config: path }});
-          _currentConfigPath = path;
-          document.getElementById("game").src = "/game?embed&ts=" + Date.now();
-          refresh();
-          loadRuns();
-        }} catch (e) {{ setStatus(e.message); }}
-      }}
-
-      let _currentConfigPath = "";
-      async function loadConfigs() {{
-        try {{
-          const res = await fetch("/api/configs");
-          const data = await res.json();
-          const select = document.getElementById("f-config");
-          select.innerHTML = "";
-          (data.configs || []).forEach(c => {{
-            const opt = document.createElement("option");
-            opt.value = c.path;
-            opt.textContent = c.name;
-            select.appendChild(opt);
-          }});
-          // Auto-select the current config from the state API
-          if (!_currentConfigPath) {{
-            try {{
-              const stRes = await fetch("/api/state");
-              const stData = await stRes.json();
-              if (stData.config && stData.config.path) _currentConfigPath = stData.config.path;
-            }} catch {{}}
-          }}
-          if (_currentConfigPath) select.value = _currentConfigPath;
-        }} catch {{}}
-      }}
-
-      async function refresh() {{
-        try {{
-          const res = await fetch("/api/state");
-          render(await res.json());
-        }} catch {{}}
-      }}
-
-      function render(state) {{
-        const s = state.summary || {{}};
-        const j = state.job || {{}};
-        const l = state.latest_step || {{}};
-        const status = j.status || "idle";
-
-        const statusEl = document.getElementById("headerStatus");
-        if (statusEl) {{
-          statusEl.textContent = j.error ? "error: " + j.error : "";
-        }}
-
-        // Game status bar
-        const gameStatusEl = document.getElementById("gameStatus");
-        const gameTitleEl = document.getElementById("gameTitle");
-        const gameSection = document.getElementById("gameSection");
-        const e = state.eval || {{}};
-        const isTraining = j.running || j.status === "running" || j.status === "starting";
-        const isEvaluating = !isTraining && _aiInterval !== null;
-        if (gameSection) {{
-          if (isTraining) gameSection.classList.add("training");
-          else gameSection.classList.remove("training");
-          if (!isEvaluating) gameSection.classList.remove("evaluating");
-        }}
-        if (gameTitleEl) {{
-          if (isTraining) gameTitleEl.textContent = "training";
-          else if (isEvaluating) gameTitleEl.textContent = "AI playing";
-          else if (e.result) gameTitleEl.textContent = "eval done";
-          else gameTitleEl.textContent = "game view";
-        }}
-        if (gameStatusEl) {{
-          if (isTraining) {{
-            const ep = s.episodes || l.episode || 0;
-            const step = s.steps || l.step || 0;
-            gameStatusEl.textContent = "training \\u00b7 ep " + ep + " \\u00b7 step " + step;
-          }} else if (isEvaluating) {{
-            gameStatusEl.textContent = "AI playing live \\u00b7 ep " + (_aiEpisodeCount + 1) + "/" + _aiTargetEpisodes;
-          }} else if (j.status === "completed" || j.status === "stopped") {{
-            gameStatusEl.textContent = j.status + " \\u00b7 " + (s.steps || 0) + " steps";
-          }} else if (j.status === "error") {{
-            gameStatusEl.textContent = "error: " + (j.error || "");
-          }} else if (e.status === "error") {{
-            gameStatusEl.textContent = "eval error: " + (e.error || "");
-          }} else if (e.result) {{
-            gameStatusEl.textContent = "eval \\u00b7 mean " + fmt(e.result.mean_score) + " \\u00b7 best " + fmt(e.result.best_score);
-          }} else {{
-            gameStatusEl.textContent = "manual play";
-          }}
-        }}
-
-        // Run info bar — single unified status
-        const ribDot = document.getElementById("ribDot");
-        const ribStatus = document.getElementById("ribStatus");
-        const ribDetail = document.getElementById("ribDetail");
-        if (ribDot) {{
-          ribDot.className = "rib-dot";
-          if (isTraining) ribDot.classList.add("running");
-          else if (isEvaluating) ribDot.classList.add("evaluating");
-          else if (j.status === "error" || e.status === "error") ribDot.classList.add("error");
-          else if (j.status === "completed") ribDot.classList.add("stopped");
-          else ribDot.classList.add("idle");
-        }}
-        if (ribStatus) {{
-          if (isTraining) ribStatus.textContent = "training";
-          else if (isEvaluating) ribStatus.textContent = "evaluating";
-          else if (j.status === "completed") ribStatus.textContent = "completed";
-          else if (j.status === "stopped") ribStatus.textContent = "stopped";
-          else if (j.status === "error") ribStatus.textContent = "error";
-          else ribStatus.textContent = "idle";
-        }}
-        if (ribDetail) {{
-          const parts = [];
-          if (s.algorithm) parts.push(s.algorithm);
-          if (s.episodes) parts.push(s.episodes + " eps");
-          if (s.best_score != null) parts.push("best:" + fmt(s.best_score));
-          if (s.steps) parts.push(fmt(s.steps) + " steps");
-          ribDetail.textContent = parts.join(" \\u00b7 ");
-        }}
-
-        // Toggle train/stop/watch buttons (eval is tracked client-side via _aiInterval)
-        if (!isEvaluating) toggleButtons(isTraining);
-
-        // Game settings
-        const gs = state.game_settings || [];
-        document.getElementById("gameSettings").innerHTML = gs.map(([k, v]) =>
-          '<span class="sk">' + k + '</span><span class="sv">' + String(v) + '</span>'
-        ).join("");
-
-        // Editable config panel (always visible)
-        renderEditableConfig(state.config_detail);
-
-        // Metrics
-        const items = [
-          ["steps", s.steps || l.step],
-          ["episodes", s.episodes],
-          ["best score", s.best_score],
-          ["loss", l.loss ?? s.mean_loss],
-          ["td error", l.td_error ?? s.mean_td_error],
-          ["epsilon", l.epsilon],
-          ["updates", l.updates ?? s.update_count],
-          ["replay", l.replay_size ?? s.replay_size],
-          ["weight delta", l.weight_delta_norm ?? s.weight_delta_norm],
-          ["target syncs", l.target_updates ?? s.target_update_count],
-        ];
-        if (state.eval && state.eval.result && state.eval.result.mean_score != null) {{
-          items.push(["eval mean", state.eval.result.mean_score]);
-        }}
-        document.getElementById("metrics").innerHTML = items.map(([label, value]) =>
-          '<div class="metric"><div class="m-label">' + label + '</div><div class="m-val">' + fmt(value) + '</div></div>'
-        ).join("");
-
-        const steps = state.steps || [];
-        drawChart("scoreChart", steps.map(e => [e.step, e.score]), "#5d9e5d");
-        drawChart("lossChart", steps.filter(e => e.loss != null).map(e => [e.step, e.loss]), "#4e89ba");
-        drawChart("epsilonChart", steps.map(e => [e.step, e.epsilon]), "#bfa03e");
-        drawChart("tdChart", steps.filter(e => e.td_error != null).map(e => [e.step, e.td_error]), "#b9524c");
-
-        const eps = (state.episodes || []).slice(-20).reverse();
-        document.getElementById("episodes").innerHTML = eps.map(e =>
-          "<tr><td>" + (e.episode ?? "") + "</td><td>" + (e.step ?? "") + "</td><td>" + fmt(e.return) + "</td><td>" + fmt(e.score) + "</td></tr>"
-        ).join("");
-      }}
-
-      function renderEditableConfig(groups) {{
-        if (!groups || !groups.length) return;
-        const el = document.getElementById("runConfig");
-        el.innerHTML = groups.map(g => {{
-          const collapsed = g.collapsed || false;
-          let html = '<div class="cfg-group' + (collapsed ? ' cfg-collapsed' : '') + '">';
-          html += '<div class="cfg-group-title">' + g.title + '</div>';
-          html += '<div class="cfg-fields">';
-          g.fields.forEach(f => {{
-            const key = f[0];
-            const val = f[1];
-            const tip = f[2] || '';
-            const meta = f[3] || {{}};
-            const ftype = meta.type || 'text';
-
-            if (ftype === 'readonly') {{
-              html += '<div class="cfg-row"><span class="cfg-key" title="' + tip + '">' + key + '</span><span class="cfg-val">' + String(val) + '</span></div>';
-              return;
-            }}
-            if (ftype === 'bool') {{
-              const checked = val ? ' checked' : '';
-              html += '<div class="cfg-row"><span class="cfg-key" title="' + tip + '">' + key + '</span>' +
-                '<input type="checkbox" class="cfg-checkbox" data-group="' + g.title + '" data-key="' + key + '" data-type="bool"' + checked + ' title="' + tip + '"></div>';
-              return;
-            }}
-            if (ftype === 'select') {{
-              const opts = (meta.options || []).map(o => {{
-                const sel = (String(o) === String(val)) ? ' selected' : '';
-                return '<option value="' + o + '"' + sel + '>' + o + '</option>';
-              }}).join('');
-              html += '<div class="cfg-row"><span class="cfg-key" title="' + tip + '">' + key + '</span>' +
-                '<select class="cfg-select" data-group="' + g.title + '" data-key="' + key + '" data-type="select" title="' + tip + '">' + opts + '</select></div>';
-              return;
-            }}
-            // number or text
-            const numAttrs = ftype === 'number' ? [
-              meta.min !== undefined ? ' min="' + meta.min + '"' : '',
-              meta.max !== undefined ? ' max="' + meta.max + '"' : '',
-              meta.step !== undefined ? ' step="' + meta.step + '"' : ' step="1"',
-              ' data-type="number"'
-            ].join('') : ' data-type="text"';
-            html += '<div class="cfg-row"><span class="cfg-key" title="' + tip + '">' + key + '</span>' +
-              '<input class="cfg-input" type="' + (ftype === 'number' ? 'number' : 'text') + '"' + numAttrs +
-              ' data-group="' + g.title + '" data-key="' + key + '" value="' + String(val).replace(/"/g, '&quot;') + '" title="' + tip + '"></div>';
-          }});
-          html += '</div></div>';
-          return html;
-        }}).join("");
-      }}
-
-      async function applyConfigEdits() {{
-        const overrides = [];
-        document.querySelectorAll('#runConfig .cfg-input, #runConfig .cfg-select, #runConfig .cfg-checkbox').forEach(el => {{
-          let value;
-          if (el.dataset.type === 'bool') {{
-            value = el.checked ? 'true' : 'false';
-          }} else {{
-            value = el.value;
-          }}
-          overrides.push({{
-            group: el.dataset.group,
-            key: el.dataset.key,
-            value: value,
-          }});
-        }});
-        if (!overrides.length) return;
-        try {{
-          await api("/api/update-config", {{ overrides }});
-          setStatus("config applied");
-          refresh();
-        }} catch (e) {{ setStatus(e.message); }}
-      }}
-
-      function setStatus(msg) {{
-        const el = document.getElementById("headerStatus");
-        if (el) el.textContent = msg;
-      }}
-
-      function toggleButtons(busy) {{
-        const btnTrain = document.getElementById("btnTrain");
-        const btnStop = document.getElementById("btnStop");
-        const btnWatch = document.getElementById("btnWatch");
-        const btnDeleteRun = document.getElementById("btnDeleteRun");
-        const ckptSel = document.getElementById("f-checkpoint");
-        const hasCkpt = ckptSel && ckptSel.options.length > 0;
-        const runSelected = document.getElementById("f-run").value !== "";
-        if (btnTrain) btnTrain.classList.toggle("hidden", !!busy);
-        if (btnStop) btnStop.classList.toggle("hidden", !busy);
-        if (btnWatch) btnWatch.classList.toggle("hidden", !!busy || !hasCkpt);
-        if (btnDeleteRun) btnDeleteRun.classList.toggle("hidden", !runSelected || !!busy);
-      }}
-
-      async function createConfig() {{
-        const name = prompt("New config name (alphanumeric, dashes ok):");
-        if (!name) return;
-        try {{
-          await api("/api/create-config", {{ name: name.trim() }});
-          loadConfigs();
-          setStatus("config created: " + name);
-        }} catch (e) {{ setStatus(e.message); }}
-      }}
-
-      async function deleteSelectedRun() {{
-        const sel = document.getElementById("f-run");
-        const name = sel.value;
-        if (!name) return;
-        if (!confirm("Delete run '" + name + "' and all its data?")) return;
-        try {{
-          await api("/api/delete-run", {{ name }});
-          sel.value = "";
-          loadRunDetail();
-          loadRuns();
-          setStatus("run deleted: " + name);
-        }} catch (e) {{ setStatus(e.message); }}
-      }}
-
-      function fmt(v) {{
-        if (v === null || v === undefined || Number.isNaN(v)) return "\\u2014";
-        if (typeof v === "number") {{
-          if (Math.abs(v) >= 1000) return v.toFixed(0);
-          if (Math.abs(v) >= 10) return v.toFixed(2);
-          return v.toFixed(4).replace(/0+$/, "").replace(/\\.$/, "");
-        }}
-        return String(v);
-      }}
-
-      function hexRgba(hex, a) {{
-        const r = parseInt(hex.slice(1, 3), 16);
-        const g = parseInt(hex.slice(3, 5), 16);
-        const b = parseInt(hex.slice(5, 7), 16);
-        return "rgba(" + r + "," + g + "," + b + "," + a + ")";
-      }}
-
-      function drawChart(id, points, color) {{
-        const canvas = document.getElementById(id);
-        const rect = canvas.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-        canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-        const ctx = canvas.getContext("2d");
-        ctx.scale(dpr, dpr);
-        const w = rect.width;
-        const h = rect.height;
-        ctx.clearRect(0, 0, w, h);
-
-        if (!points.length) {{
-          ctx.fillStyle = "#7d7870";
-          ctx.font = "11px 'IBM Plex Mono', monospace";
-          ctx.textAlign = "center";
-          ctx.fillText("no data", w / 2, h / 2 + 4);
-          return;
-        }}
-
-        const xs = points.map(p => p[0]);
-        const ys = points.map(p => p[1]).filter(Number.isFinite);
-        let minY = Math.min(...ys);
-        let maxY = Math.max(...ys);
-        if (!Number.isFinite(minY)) return;
-        if (maxY - minY < 1e-9) {{ minY -= 1; maxY += 1; }}
-        const minX = Math.min(...xs);
-        const maxX = Math.max(...xs);
-
-        const px = (x) => ((x - minX) / Math.max(1, maxX - minX)) * w;
-        const py = (y) => h - ((y - minY) / (maxY - minY)) * h;
-
-        ctx.beginPath();
-        points.forEach(([x, y], i) => {{
-          if (i === 0) ctx.moveTo(px(x), py(y));
-          else ctx.lineTo(px(x), py(y));
-        }});
-        ctx.lineTo(px(xs[xs.length - 1]), h);
-        ctx.lineTo(px(xs[0]), h);
-        ctx.closePath();
-        const grad = ctx.createLinearGradient(0, 0, 0, h);
-        grad.addColorStop(0, hexRgba(color, 0.15));
-        grad.addColorStop(1, hexRgba(color, 0.01));
-        ctx.fillStyle = grad;
-        ctx.fill();
-
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.8;
-        ctx.lineJoin = "round";
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        points.forEach(([x, y], i) => {{
-          if (i === 0) ctx.moveTo(px(x), py(y));
-          else ctx.lineTo(px(x), py(y));
-        }});
-        ctx.stroke();
-
-        const last = points[points.length - 1];
-        ctx.beginPath();
-        ctx.arc(px(last[0]), py(last[1]), 3, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.fill();
-
-        ctx.fillStyle = "#7d7870";
-        ctx.font = "9px 'IBM Plex Mono', monospace";
-        ctx.textAlign = "left";
-        ctx.fillText(fmt(maxY), 3, 9);
-        ctx.textAlign = "right";
-        ctx.fillText(fmt(minY), w - 3, h - 3);
-      }}
-
-      function pollFrame() {{
-        const section = document.getElementById("gameSection");
-        if (!section || !section.classList.contains("training")) return;
-        const img = document.getElementById("trainFrame");
-        if (!img) return;
-        img.src = "/api/frame?ts=" + Date.now();
-      }}
-
-      // Wire config dropdown to switchConfig
-      document.getElementById("f-config").addEventListener("change", switchConfig);
-
-      // Init
-      refresh();
-      loadRuns();
-      loadConfigs();
-      // Toggle config group collapse via event delegation (bind once)
-      document.getElementById("runConfig").addEventListener("click", function(e) {{
-        if (e.target.classList.contains("cfg-group-title")) {{
-          e.target.parentElement.classList.toggle("cfg-collapsed");
-        }}
-      }});
-      setInterval(refresh, 1000);
-      setInterval(pollGameStats, 500);
-      setInterval(pollFrame, 500);
-    </script>
-  </body>
-</html>
-"""
 
 
 def _preprocess_canvas_frame(png_bytes: bytes, config: ProjectConfig) -> Any:
@@ -2766,7 +1522,13 @@ def _preprocess_canvas_frame(png_bytes: bytes, config: ProjectConfig) -> Any:
     array = np.asarray(image, dtype=np.uint8)
     array = array[None, :, :] if obs_cfg.grayscale else array.transpose(2, 0, 1)
 
-    array = apply_crop(array, top=obs_cfg.crop_top, bottom=obs_cfg.crop_bottom, left=obs_cfg.crop_left, right=obs_cfg.crop_right)
+    array = apply_crop(
+        array,
+        top=obs_cfg.crop_top,
+        bottom=obs_cfg.crop_bottom,
+        left=obs_cfg.crop_left,
+        right=obs_cfg.crop_right,
+    )
 
     if array.shape[0] == 1:
         image = Image.fromarray(array[0], mode="L")

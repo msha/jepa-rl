@@ -1,0 +1,275 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - 'generic "JEPA-RL: Joint-Embedding Predictive Architecture for Reinforcement Learning" [ref=e4]': jepa-rl
+    - generic "Current active run directory" [ref=e6]: ui_train
+  - main [ref=e7]:
+    - generic [ref=e8]:
+      - generic "Live training metrics updated every refresh" [ref=e9]:
+        - generic [ref=e10]:
+          - generic [ref=e11]: steps
+          - generic [ref=e12]: "110.00"
+        - generic [ref=e13]:
+          - generic [ref=e14]: episodes
+          - generic [ref=e15]: "4"
+        - generic [ref=e16]:
+          - generic [ref=e17]: best score
+          - generic [ref=e18]: "64.00"
+        - generic [ref=e19]:
+          - generic [ref=e20]: updates
+          - generic [ref=e21]: "25.00"
+        - generic [ref=e22]:
+          - generic [ref=e23]: replay
+          - generic [ref=e24]: "114.00"
+        - generic [ref=e25]:
+          - generic [ref=e26]: weight delta
+          - generic [ref=e27]: "0.0979"
+        - generic [ref=e28]:
+          - generic [ref=e29]: target syncs
+          - generic [ref=e30]: "0"
+      - generic [ref=e31]:
+        - generic [ref=e33]:
+          - generic [ref=e34]: score
+          - generic [ref=e35]: "13.00"
+        - generic [ref=e38]:
+          - generic [ref=e39]: loss
+          - generic [ref=e40]: "0.6996"
+        - generic [ref=e43]:
+          - generic [ref=e44]: epsilon
+          - generic [ref=e45]: "0.9998"
+        - generic [ref=e48]:
+          - generic [ref=e49]: td error
+          - generic [ref=e50]: "0.9073"
+      - generic [ref=e52]:
+        - generic [ref=e53]:
+          - generic [ref=e54]:
+            - generic [ref=e55]: episodes
+            - generic [ref=e56]: "4"
+          - generic [ref=e57]:
+            - generic [ref=e58]:
+              - generic [ref=e59]: best
+              - generic [ref=e60]: "64.0"
+            - generic [ref=e61]:
+              - generic [ref=e62]: avg
+              - generic [ref=e63]: "33.0"
+            - generic [ref=e64]:
+              - generic [ref=e65]: last 5
+              - generic [ref=e66]: 33.0 →
+            - generic [ref=e67]:
+              - generic [ref=e68]: avg len
+              - generic [ref=e69]: "66.0"
+        - generic [ref=e70]:
+          - generic [ref=e71]: ★
+          - generic [ref=e72]: "best ckpt: ep 2 · score 64.0"
+          - generic [ref=e73]: saved
+        - generic [ref=e75]:
+          - generic [ref=e76]:
+            - generic [ref=e77]: "#"
+            - generic [ref=e78]: step
+            - generic [ref=e79]: return
+            - generic [ref=e80]: score
+          - generic [ref=e81]:
+            - generic [ref=e82]: "3"
+            - generic [ref=e83]: "106.0"
+            - generic [ref=e84]: "25.0"
+            - generic [ref=e85]: "25.0"
+          - generic [ref=e86]:
+            - generic [ref=e87]: "2"
+            - generic [ref=e88]: "86.0"
+            - generic [ref=e89]: "64.0"
+            - generic [ref=e90]: "64.0"
+          - generic [ref=e91]:
+            - generic [ref=e92]: "1"
+            - generic [ref=e93]: "48.0"
+            - generic [ref=e94]: "25.0"
+            - generic [ref=e95]: "25.0"
+          - generic [ref=e96]:
+            - generic [ref=e97]: "0"
+            - generic [ref=e98]: "24.0"
+            - generic [ref=e99]: "18.0"
+            - generic [ref=e100]: "18.0"
+    - generic [ref=e101]:
+      - generic [ref=e102]:
+        - generic [ref=e103]:
+          - combobox "Available game configs in configs/games/" [ref=e104] [cursor=pointer]:
+            - option "asteroids"
+            - option "breakout" [selected]
+            - option "breakout_tiny"
+            - option "snake"
+          - generic [ref=e105]: game view
+          - generic [ref=e106]: manual play
+          - generic [ref=e260]:
+            - text: score
+            - strong [ref=e261]: "0"
+            - text: lives
+            - strong [ref=e262]: "3"
+          - button "hide" [ref=e107] [cursor=pointer]
+        - iframe [active] [ref=e109]:
+          - main [ref=f1e2]:
+            - generic [ref=f1e3]:
+              - heading "JEPA-RL Breakout" [level=1] [ref=f1e4]
+              - generic [ref=f1e5]:
+                - generic [ref=f1e6]:
+                  - text: Score
+                  - strong [ref=f1e7]: "0"
+                - generic [ref=f1e8]:
+                  - text: Lives
+                  - strong [ref=f1e9]: "3"
+            - generic [ref=f1e11]: Playing
+        - generic [ref=e110]:
+          - generic [ref=e111]: play
+          - button "▲ up" [ref=e112] [cursor=pointer]
+          - button "◀ left" [ref=e113] [cursor=pointer]
+          - button "▼ down" [ref=e114] [cursor=pointer]
+          - button "right ▶" [ref=e115] [cursor=pointer]
+          - button "start" [ref=e116] [cursor=pointer]
+          - button "reset" [ref=e117] [cursor=pointer]
+      - generic "Game configuration settings for the active config" [ref=e118]:
+        - generic [ref=e119]: description
+        - generic [ref=e120]: Destroy bricks with a bouncing ball. Don't let it fall!
+        - generic [ref=e121]: resolution
+        - generic [ref=e122]: 160x120
+        - generic [ref=e123]: fps
+        - generic [ref=e124]: "30"
+        - generic [ref=e125]: action repeat
+        - generic [ref=e126]: "4"
+        - generic [ref=e127]: obs mode
+        - generic [ref=e128]: screenshot
+        - generic [ref=e129]: frame stack
+        - generic [ref=e130]: "4"
+        - generic [ref=e131]: actions
+        - generic [ref=e132]: noop, ArrowLeft, ArrowRight, Space, ArrowLeft+Space, ArrowRight+Space
+        - generic [ref=e133]: max steps
+        - generic [ref=e134]: "1000"
+    - generic [ref=e135]:
+      - generic [ref=e136]:
+        - generic [ref=e137]:
+          - combobox "Select a training run" [ref=e138]:
+            - option "select run..."
+            - option "breakout_random" [selected]
+            - option "ui_train · pixel_dqn · best:64.00 · 110 steps"
+            - option "breakout_tiny · pixel_dqn · best:318.00 · 500 steps"
+            - option "train · pixel_dqn · best:131.00 · 500 steps"
+            - option "eval"
+          - button "+ new" [ref=e139] [cursor=pointer]
+          - generic "Include smoke test runs" [ref=e140] [cursor=pointer]:
+            - checkbox "smoke" [ref=e141]
+            - text: smoke
+          - button "del" [ref=e142] [cursor=pointer]
+        - generic [ref=e143]:
+          - generic [ref=e145]: idle
+          - generic [ref=e146]: pixel_dqn · 4 eps · best:64.00 · 110.00 steps
+        - generic [ref=e147]:
+          - button "1 check" [ref=e148] [cursor=pointer]:
+            - generic [ref=e149]: "1"
+            - generic [ref=e150]: check
+          - button "2 data" [ref=e152] [cursor=pointer]:
+            - generic [ref=e153]: "2"
+            - generic [ref=e154]: data
+          - button "– jepa" [ref=e156] [cursor=pointer]:
+            - generic [ref=e157]: –
+            - generic [ref=e158]: jepa
+          - button "4 train" [ref=e160] [cursor=pointer]:
+            - generic [ref=e161]: "4"
+            - generic [ref=e162]: train
+        - generic [ref=e163]:
+          - generic "RL Algorithm" [ref=e164]: algorithm
+          - combobox [ref=e165]:
+            - option "dqn" [selected]
+            - option "frozen jepa dqn"
+            - option "linear q"
+          - generic "Resume from checkpoint" [ref=e166]: from
+          - combobox [ref=e167]:
+            - option "best"
+            - option "latest" [selected]
+          - generic "Steps before model updates" [ref=e168]: warmup
+          - spinbutton [ref=e169]: "0"
+          - generic "Additional training steps" [ref=e170]: + steps
+          - spinbutton [ref=e172]: "500"
+          - generic "Minibatch size" [ref=e173]: batch
+          - spinbutton [ref=e174]: "16"
+          - generic "Learning rate override" [ref=e175]: lr
+          - spinbutton [ref=e176]
+          - generic "Log every N steps" [ref=e177]: log every
+          - spinbutton [ref=e178]: "5"
+          - generic "Show browser window" [ref=e179]: headed
+          - checkbox [ref=e181]
+          - generic [ref=e183]:
+            - button "← back" [ref=e184] [cursor=pointer]
+            - button "watch" [ref=e185] [cursor=pointer]
+            - button "train" [ref=e186] [cursor=pointer]
+      - generic [ref=e187]:
+        - generic "All config parameters for the active game" [ref=e188]: config
+        - generic [ref=e189]:
+          - generic [ref=e190]:
+            - generic [ref=e191] [cursor=pointer]:
+              - generic [ref=e192]: ▼
+              - text: experiment
+            - generic [ref=e193]:
+              - generic "Run identifier" [ref=e194]: name
+              - generic "Run identifier (Click to edit)" [ref=e195] [cursor=pointer]: breakout_jepa_dqn_small
+              - generic "Compute device" [ref=e196]: device
+              - generic "Compute device (Click to edit)" [ref=e197] [cursor=pointer]: auto
+              - generic "Numeric precision" [ref=e198]: precision
+              - generic "Numeric precision (Click to edit)" [ref=e199] [cursor=pointer]: fp32
+              - generic "Random seed" [ref=e200]: seed
+              - generic "Random seed (Click to edit)" [ref=e201] [cursor=pointer]: "42"
+          - generic [ref=e202]:
+            - generic [ref=e203] [cursor=pointer]:
+              - generic [ref=e204]: ▼
+              - text: agent
+            - generic [ref=e205]:
+              - generic "RL algorithm" [ref=e206]: algorithm
+              - generic "RL algorithm (Click to edit)" [ref=e207] [cursor=pointer]: dqn
+              - generic "Discount factor" [ref=e208]: gamma
+              - generic "Discount factor (Click to edit)" [ref=e209] [cursor=pointer]: "0.997"
+              - generic "N-step return" [ref=e210]: n_step
+              - generic "N-step return (Click to edit)" [ref=e211] [cursor=pointer]: "5"
+              - generic "Batch size" [ref=e212]: batch_size
+              - generic "Batch size (Click to edit)" [ref=e213] [cursor=pointer]: "256"
+              - generic "Steps before learning" [ref=e214]: learning_starts
+              - generic "Steps before learning (Click to edit)" [ref=e215] [cursor=pointer]: "10000"
+              - generic "Train every N steps" [ref=e216]: train_every
+              - generic "Train every N steps (Click to edit)" [ref=e217] [cursor=pointer]: "4"
+              - generic "Target sync interval" [ref=e218]: target_update_interval
+              - generic "Target sync interval (Click to edit)" [ref=e219] [cursor=pointer]: "2000"
+          - generic [ref=e220]:
+            - generic [ref=e221] [cursor=pointer]:
+              - generic [ref=e222]: ▼
+              - text: exploration
+            - generic [ref=e223]:
+              - generic "Initial epsilon" [ref=e224]: epsilon_start
+              - generic "Initial epsilon (Click to edit)" [ref=e225] [cursor=pointer]: "1"
+              - generic "Final epsilon" [ref=e226]: epsilon_end
+              - generic "Final epsilon (Click to edit)" [ref=e227] [cursor=pointer]: "0.05"
+              - generic "Decay steps" [ref=e228]: epsilon_decay_steps
+              - generic "Decay steps (Click to edit)" [ref=e229] [cursor=pointer]: "500000"
+          - generic [ref=e230]:
+            - generic [ref=e231] [cursor=pointer]:
+              - generic [ref=e232]: ▼
+              - text: replay
+            - generic [ref=e233]:
+              - generic "Buffer capacity" [ref=e234]: capacity
+              - generic "Buffer capacity (Click to edit)" [ref=e235] [cursor=pointer]: "1000000"
+              - generic "Prioritized replay" [ref=e236]: prioritized
+              - checkbox "Prioritized replay" [ref=e238]
+              - generic "Sequence length" [ref=e239]: sequence_length
+              - generic "Sequence length (Click to edit)" [ref=e240] [cursor=pointer]: "16"
+          - generic [ref=e241]:
+            - generic [ref=e242] [cursor=pointer]:
+              - generic [ref=e243]: ▼
+              - text: world_model
+            - generic [ref=e244]:
+              - generic "Use JEPA world model" [ref=e245]: enabled
+              - checkbox "Use JEPA world model" [checked] [ref=e247]
+              - generic "Latent dim" [ref=e248]: latent_dim
+              - generic "Latent dim (Click to edit)" [ref=e249] [cursor=pointer]: "512"
+              - generic "Encoder" [ref=e250]: encoder
+              - generic "Encoder" [ref=e251]: conv
+              - generic "Predictor" [ref=e252]: predictor
+              - generic "Predictor" [ref=e253]: transformer
+              - generic "Horizons" [ref=e254]: horizons
+              - generic "Horizons" [ref=e255]: 1,2,4,8
+              - generic "Loss function" [ref=e256]: loss
+              - generic "Loss function" [ref=e257]: cosine_mse
+              - generic "EMA tau schedule" [ref=e258]: ema_tau
+              - generic "EMA tau schedule" [ref=e259]: 0.996–0.9999

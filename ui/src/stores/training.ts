@@ -16,6 +16,7 @@ export interface Job {
 export interface EvalJob {
   status: string
   run_name: string
+  checkpoint_name: string
   running: boolean
   episode_count: number
   episodes_target: number
