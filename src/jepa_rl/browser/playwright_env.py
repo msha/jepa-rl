@@ -83,6 +83,7 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         self._page: Any | None = None
         self._frames: deque[np.ndarray] = deque(maxlen=config.observation.frame_stack)
         self._last_score = 0.0
+        self._zero_score_steps = 0
         self._steps = 0
         self._recorder: EpisodeRecorder | None = None
         self._episode_index = 0
@@ -187,8 +188,13 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
             )
             raise
         self._focus_game()
+        # Press reset key (Space) to dismiss the waiting/start screen.
+        if self.config.game.reset_key:
+            page.keyboard.press(self.config.game.reset_key)
+            page.wait_for_timeout(100)
         self._steps = 0
         self._last_score = self.read_score()
+        self._zero_score_steps = 0
         frame = self._capture_frame()
         self._frames.clear()
         for _ in range(self.config.observation.frame_stack):
@@ -208,6 +214,14 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         score = self.read_score()
         reward = score - self._last_score
         self._last_score = score
+        zero_score_penalty_applied = 0.0
+        if score == 0.0:
+            self._zero_score_steps += 1
+            if self._zero_score_steps > self.config.reward.zero_score_patience_steps:
+                zero_score_penalty_applied = self.config.reward.zero_score_penalty
+                reward -= zero_score_penalty_applied
+        else:
+            self._zero_score_steps = 0
         if self.config.reward.survival_bonus:
             reward += self.config.reward.survival_bonus
         done = self.is_done()
@@ -221,7 +235,12 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
             reward=float(reward),
             done=done,
             score=float(score),
-            info={"action_name": selected.name, "steps": self._steps},
+            info={
+                "action_name": selected.name,
+                "steps": self._steps,
+                "zero_score_steps": self._zero_score_steps,
+                "zero_score_penalty": zero_score_penalty_applied,
+            },
         )
 
     def observe(self) -> Observation:
@@ -330,8 +349,7 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
         time.sleep(0)
 
     def _capture_frame(self) -> np.ndarray:
-        page = self._require_page()
-        png = page.screenshot(full_page=False)
+        png = self._capture_observation_png()
         image = Image.open(BytesIO(png))
         mode = "L" if self.config.observation.grayscale else "RGB"
         image = image.convert(mode)
@@ -365,6 +383,17 @@ class PlaywrightBrowserGameEnv(BrowserGameEnv):
             array = apply_normalize(array)
 
         return array
+
+    def _capture_observation_png(self) -> bytes:
+        page = self._require_page()
+        if self.config.observation.mode == "canvas":
+            try:
+                return page.locator("canvas").first.screenshot(timeout=1000)
+            except Exception as exc:
+                raise BrowserEnvError(
+                    "canvas observation mode requires a visible <canvas> element"
+                ) from exc
+        return page.screenshot(full_page=False)
 
     def _observation_from_stack(self) -> Observation:
         data = np.concatenate(tuple(self._frames), axis=0)

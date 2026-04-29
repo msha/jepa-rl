@@ -19,6 +19,8 @@ def test_load_breakout_config_merges_base_and_small_preset() -> None:
     assert config.world_model.latent_dim == 512
     assert config.agent.algorithm == "dqn"
     assert config.replay.sequence_length == 16
+    assert config.reward.zero_score_patience_steps == 120
+    assert config.reward.zero_score_penalty == 0.01
 
 
 @pytest.mark.parametrize(
@@ -99,3 +101,15 @@ def test_snapshot_config_writes_loadable_yaml(tmp_path) -> None:
 
     assert loaded.experiment.name == config.experiment.name
     assert loaded.actions.keys == config.actions.keys
+
+
+def test_reward_zero_score_penalty_must_be_nonnegative() -> None:
+    from jepa_rl.utils.config import RewardConfig
+
+    with pytest.raises(ConfigError, match="zero_score_penalty"):
+        RewardConfig.from_dict({
+            "type": "score_delta",
+            "score_reader": "dom",
+            "score_selector": "#score",
+            "zero_score_penalty": -0.01,
+        })

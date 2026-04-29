@@ -6,7 +6,7 @@ The first target is a Breakout-like browser game benchmark. Version 1 is complet
 
 ## Status
 
-This repository now has an initial runnable browser-game scaffold: package metadata, a `jepa-rl` CLI, typed configuration loading and validation, starter configs, a local Breakout-like HTML game, Playwright browser control, screenshot observations, DOM score reading, discrete keyboard action parsing, an in-memory replay buffer, run artifact directory creation, a minimal NumPy pixel-Q smoke trainer, and unit tests.
+This repository now has an initial runnable browser-game scaffold: package metadata, a `jepa-rl` CLI, typed configuration loading and validation, starter configs, a local Breakout-like HTML game, Playwright browser control, screenshot/canvas observations, DOM score reading, discrete keyboard action parsing, an in-memory replay buffer, run artifact directory creation, a minimal NumPy pixel-Q smoke trainer, and unit tests.
 
 Implemented CLI commands:
 
@@ -65,6 +65,12 @@ uv run jepa-rl eval --config configs/games/breakout.yaml --checkpoint runs/smoke
 ```
 
 `open-game` always opens visible Chromium. Add `--hold` to keep it open until Ctrl+C, or close the browser window directly; both paths exit cleanly. `ui` opens a local control panel with the game embedded, Start/Stop/Eval buttons, and live charts for score, loss, epsilon, TD error, replay size, updates, and progress. Add `--headed` to `collect-random`, `train`, or `eval` to watch Chromium play during those commands. `ml-smoke` is a fast numeric check that the current linear Q learner reduces loss and changes weights before involving the browser. `train` writes `runs/<experiment>/dashboard.html`, and `dashboard --open` regenerates and opens that static UI panel. `uv.lock` is committed; CI installs from it with `uv sync --frozen`.
+
+## Runtime Support
+
+The package supports Python 3.11 through 3.13. The current workspace install was verified with Python 3.13.1, PyTorch 2.11.0, and Apple MPS available.
+
+CPU is the baseline supported runtime. CUDA is not verified in this workspace and no CUDA version is claimed as supported yet; use the PyTorch wheel that matches your local driver/toolkit when testing NVIDIA GPUs. The training code falls back to fp32 on MPS if fp16 or bf16 is requested.
 
 ## Project Goals
 
@@ -324,6 +330,8 @@ reward:
   score_selector: "#score"
   survival_bonus: 0.0
   idle_penalty: 0.0
+  zero_score_patience_steps: 120
+  zero_score_penalty: 0.01
   death_penalty: 0.0
   clip_rewards: false
 

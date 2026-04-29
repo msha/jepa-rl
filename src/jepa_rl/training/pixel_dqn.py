@@ -331,6 +331,7 @@ def train_dqn(
                             target_update_count,
                             best_score,
                             config,
+                            replay_size=len(replay),
                         )
 
                     writer.write(
@@ -380,6 +381,7 @@ def train_dqn(
                         target_update_count,
                         best_score if best_score != float("-inf") else 0.0,
                         config,
+                        replay_size=len(replay),
                     )
 
     # Final checkpoint and summary
@@ -402,6 +404,7 @@ def train_dqn(
         target_update_count,
         final_score,
         config,
+        replay_size=len(replay),
     )
     if not best_checkpoint_path.exists():
         _save_ckpt(
@@ -417,6 +420,7 @@ def train_dqn(
             target_update_count,
             final_score,
             config,
+            replay_size=len(replay),
         )
 
     _update_summary(
@@ -565,6 +569,7 @@ def _save_ckpt(
     target_update_count: int,
     best_score: float,
     config: ProjectConfig,
+    replay_size: int = 0,
 ) -> None:
     save_torch_checkpoint(
         path,
@@ -581,6 +586,7 @@ def _save_ckpt(
             rng_python=py_rng.getstate(),
             rng_numpy=np_rng.bit_generator.state,
             rng_torch=torch.get_rng_state(),
+            extra={"replay_size": replay_size},
         ),
     )
 

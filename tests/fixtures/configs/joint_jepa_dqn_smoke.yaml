@@ -1,0 +1,71 @@
+extends:
+  - ../../../configs/presets/tiny.yaml
+
+experiment:
+  device: cpu
+  precision: fp32
+
+game:
+  url: "about:blank"
+  max_steps_per_episode: 32
+
+observation:
+  width: 32
+  height: 32
+  grayscale: true
+  frame_stack: 1
+
+actions:
+  keys:
+    - noop
+    - a
+    - b
+    - c
+
+agent:
+  algorithm: joint_jepa_dqn
+  learning_starts: 64
+  target_update_interval: 200
+  batch_size: 8
+  gradient_steps: 1
+  train_every: 1
+  q_network:
+    hidden_dims:
+      - 64
+    dueling: false
+    distributional: false
+
+world_model:
+  latent_dim: 32
+  encoder:
+    hidden_channels:
+      - 8
+      - 16
+  predictor:
+    hidden_dim: 32
+    depth: 1
+    num_heads: 2
+    horizons:
+      - 1
+      - 2
+    action_embed_dim: 8
+  loss:
+    lambda_var: 1.0
+    lambda_cov: 0.04
+    variance_floor: 1.0
+
+replay:
+  capacity: 1000
+  prioritized: false
+
+exploration:
+  epsilon_start: 1.0
+  epsilon_end: 0.1
+  epsilon_decay_steps: 500
+  intrinsic_reward:
+    enabled: false
+
+training:
+  world_updates_per_env_step: 1
+  policy_updates_per_env_step: 1
+  checkpoint_interval_steps: 500

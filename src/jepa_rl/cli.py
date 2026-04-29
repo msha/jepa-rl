@@ -298,6 +298,18 @@ def _cmd_train(args: argparse.Namespace) -> int:
                 batch_size=args.batch_size,
                 dashboard_every=args.dashboard_every,
             )
+        elif algorithm == "joint_jepa_dqn":
+            from jepa_rl.training.joint_jepa_dqn import train_joint_jepa_dqn
+
+            summary = train_joint_jepa_dqn(
+                config,
+                experiment=args.experiment,
+                steps=args.steps,
+                learning_starts=args.learning_starts,
+                headless=not args.headed,
+                batch_size=args.batch_size,
+                dashboard_every=args.dashboard_every,
+            )
         else:
             from jepa_rl.training.simple_q import train_linear_q
 
@@ -315,7 +327,8 @@ def _cmd_train(args: argparse.Namespace) -> int:
         print(f"train failed: {exc}", file=sys.stderr)
         return 2
 
-    print(
+    weight_delta = getattr(summary, "weight_delta_norm", None)
+    msg = (
         "training complete: "
         f"run_dir={summary.run_dir} "
         f"checkpoint={summary.checkpoint} "
@@ -326,9 +339,11 @@ def _cmd_train(args: argparse.Namespace) -> int:
         f"updates={summary.update_count} "
         f"replay_size={summary.replay_size} "
         f"target_updates={summary.target_update_count} "
-        f"weight_delta_norm={summary.weight_delta_norm:.6f} "
         f"dashboard={summary.dashboard}"
     )
+    if weight_delta is not None:
+        msg += f" weight_delta_norm={weight_delta:.6f}"
+    print(msg)
     return 0
 
 
@@ -367,6 +382,18 @@ def _cmd_eval(args: argparse.Namespace) -> int:
                 checkpoint=args.checkpoint,
                 episodes=args.episodes,
                 headless=not args.headed,
+            )
+        elif algorithm == "joint_jepa_dqn":
+            from jepa_rl.training.joint_jepa_dqn import evaluate_joint_jepa_dqn
+
+            summary = evaluate_joint_jepa_dqn(
+                config,
+                args.checkpoint,
+                episodes=args.episodes,
+                headless=not args.headed,
+                run_dir=Path(args.checkpoint).parent.parent
+                if args.checkpoint
+                else None,
             )
         else:
             from jepa_rl.training.simple_q import evaluate_linear_q

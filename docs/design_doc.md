@@ -632,6 +632,8 @@ reward:
   score_selector: "#score"
   survival_bonus: 0.0
   idle_penalty: 0.0
+  zero_score_patience_steps: 120
+  zero_score_penalty: 0.01
   death_penalty: 0.0
   clip_rewards: false
 
@@ -1511,4 +1513,3 @@ initial_research_track:
 ```
 
 The first milestone should remain practical: prove that JEPA improves sample efficiency on a Breakout-like browser game. Once that works, the next step should be policy-conditioned JEPA or value-guided latent planning, not a larger encoder by default.
-

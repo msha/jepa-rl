@@ -46,7 +46,7 @@ References: design_doc §17 (Repository Structure).
 - [x] P0 Add a minimal CI workflow once the project is in git.
 - [x] P0 Add a smoke-test command that runs without GPU.
 - [x] P1 Add `Makefile` or task runner commands for setup, lint, test, format, and smoke tests.
-- [ ] P1 Document supported Python and CUDA versions after first verified install.
+- [x] P1 Document supported Python and CUDA versions after first verified install.
 
 Definition of done:
 
@@ -68,7 +68,7 @@ References: design_doc §10 (Configuration System), §12 (Model Size Presets).
 - [x] P0 Add `configs/presets/small.yaml`.
 - [x] P1 Add `configs/presets/base.yaml` (ViT, 224x224).
 - [x] P0 Add `configs/games/breakout.yaml` for the first target game.
-- [ ] P1 Add `configs/games/snake.yaml` after Breakout works.
+- [x] P1 Add `configs/games/snake.yaml` after Breakout works.
 - [x] P1 Add `jepa-rl validate-config --config ...`.
 - [x] P1 Include derived settings in validation, such as input channels from RGB/grayscale and frame stack.
 - [x] P1 Validate that `world_model.predictor.conditioning.policy_embedding` and `value_guidance` are off until V2/V3 phases (16, 17).
@@ -95,10 +95,10 @@ References: design_doc §6 (Environment Interface), §15 (Browser Automation).
 - [x] P0 Use isolated browser contexts and dedicated browser profiles.
 - [x] P0 Set fixed viewport from config.
 - [x] P0 Implement screenshot observation mode.
-- [ ] P1 Implement canvas capture observation mode.
+- [x] P1 Implement canvas capture observation mode.
 - [ ] P1 Implement DOM-assisted observation mode (screenshot + DOM-extracted score/lives/timer).
 - [x] P0 Implement resize, grayscale, and frame stack wrappers.
-- [ ] P0 Implement crop and normalization wrappers.
+- [x] P0 Implement crop and normalization wrappers.
 - [x] P0 Implement discrete keyboard action space.
 - [x] P0 Implement no-op action.
 - [x] P0 Implement key combination actions such as `ArrowLeft+Space`.
@@ -113,8 +113,8 @@ References: design_doc §6 (Environment Interface), §15 (Browser Automation).
 - [ ] P1 Implement visual template score reader for digit sprites or lives icons.
 - [x] P0 Implement terminal detection by max steps and configured done selector.
 - [ ] P1 Implement visual terminal detection hook.
-- [ ] P0 Save screenshots when score reading fails.
-- [ ] P0 Log reset failures and score-reader failures.
+- [x] P0 Save screenshots when score reading fails.
+- [x] P0 Log reset failures and score-reader failures.
 - [x] P0 Add random policy runner.
 - [ ] P0 Add replay video recording for evaluation episodes.
 
@@ -175,7 +175,7 @@ References: design_doc §13 (Evaluation), Product Requirements §3.1.
 - [x] P0 Save best checkpoint by deterministic mean evaluation score.
 - [ ] P1 Save top-k checkpoints.
 - [x] P0 Save optimizer and scheduler state.
-- [ ] P0 Save replay cursor or replay metadata.
+- [x] P0 Save replay cursor or replay metadata.
 - [ ] P1 Add TensorBoard or Weights & Biases adapter.
 - [ ] P1 Log browser diagnostics.
 - [ ] P1 Log GPU and memory diagnostics.
@@ -228,7 +228,7 @@ References: design_doc §7 (JEPA World Model), §24 (Updated Architecture). Pape
 - [ ] P1 Implement GRU predictor option.
 - [x] P0 Implement horizon embeddings.
 - [x] P0 Implement multi-horizon prediction (e.g., `[1, 2, 4, 8]`).
-- [ ] P0 Implement `action_chunk_size` (ACT-JEPA-style action chunking).
+- [x] P0 Implement `action_chunk_size` (ACT-JEPA-style action chunking).
 - [x] P0 Implement normalized latent prediction loss (cosine + MSE on normalized embeddings).
 - [x] P0 Implement variance regularization (`lambda_var`).
 - [x] P0 Implement covariance regularization (`lambda_cov`).
@@ -269,17 +269,17 @@ Definition of done:
 
 References: design_doc §9.2 (Training Loop), §8.5 (Exploration).
 
-- [ ] P1 Implement joint training loop.
-- [ ] P1 Alternate rollout, replay insertion, JEPA updates, and DQN updates.
-- [ ] P1 Make `world_updates_per_env_step` configurable (defaults: 1; compute-constrained: 0.25; representation-heavy: 2).
-- [ ] P1 Make `policy_updates_per_env_step` configurable.
-- [ ] P1 Implement world-model warmup before policy learning.
+- [x] P1 Implement joint training loop.
+- [x] P1 Alternate rollout, replay insertion, JEPA updates, and DQN updates.
+- [x] P1 Make `world_updates_per_env_step` configurable (defaults: 1; compute-constrained: 0.25; representation-heavy: 2).
+- [x] P1 Make `policy_updates_per_env_step` configurable.
+- [x] P1 Implement world-model warmup before policy learning.
 - [ ] P1 Implement optional intrinsic reward from JEPA prediction error.
 - [ ] P1 Normalize intrinsic reward.
 - [ ] P1 Log environment reward and intrinsic reward separately.
 - [ ] P1 Support freezing/unfreezing encoder for ablation.
-- [ ] P1 Avoid accidental target leakage from future observations into policy action selection.
-- [ ] P1 Save joint checkpoints with world model, agent, optimizers, schedules, and replay metadata.
+- [x] P1 Avoid accidental target leakage from future observations into policy action selection.
+- [x] P1 Save joint checkpoints with world model, agent, optimizers, schedules, and replay metadata.
 - [ ] P2 Add ACT-JEPA-style imitation pretraining mode for policy warm-starts.
 
 Definition of done:
@@ -330,7 +330,7 @@ References: design_doc §20 (Recommended Initial Experiment).
 - [x] P0 Validate score reader for Breakout.
 - [x] P0 Validate reset logic for Breakout.
 - [ ] P0 Measure random-policy baseline for Breakout.
-- [ ] P1 Add Snake config.
+- [x] P1 Add Snake config.
 - [ ] P1 Add Flappy Bird config.
 - [ ] P1 Add a simple platformer config.
 - [ ] P2 Add clicker or mouse-heavy benchmark.
@@ -345,8 +345,8 @@ Definition of done:
 
 - [x] P0 Test config validation and default merging.
 - [x] P0 Test action parsing and key-combination expansion.
-- [ ] P0 Test frame stack shape and reset behavior.
-- [ ] P0 Test score readers with saved HTML snippets and screenshots.
+- [x] P0 Test frame stack shape and reset behavior.
+- [x] P0 Test score readers with saved HTML snippets and screenshots.
 - [x] P0 Test replay insertion, eviction, transition sampling, and sequence sampling.
 - [x] P0 Test DQN target shape and loss computation.
 - [x] P0 Test JEPA encoder and predictor shapes.
@@ -367,12 +367,12 @@ Definition of done:
 
 References: design_doc §15.2, §18.
 
-- [ ] P0 Use dedicated browser contexts.
-- [ ] P0 Avoid personal browser profiles.
-- [ ] P0 Disable extensions.
-- [ ] P0 Keep headless mode as default.
-- [ ] P0 Make viewport deterministic.
-- [ ] P0 Do not mutate game source, score, memory, local storage, or network requests for advantage.
+- [x] P0 Use dedicated browser contexts.
+- [x] P0 Avoid personal browser profiles.
+- [x] P0 Disable extensions.
+- [x] P0 Keep headless mode as default.
+- [x] P0 Make viewport deterministic.
+- [x] P0 Do not mutate game source, score, memory, local storage, or network requests for advantage.
 - [ ] P1 Add optional network allowlist.
 - [ ] P1 Mark JavaScript score/reset callbacks as privileged in config and logs.
 - [ ] P1 Save explicit run metadata when privileged callbacks are enabled.
@@ -433,7 +433,7 @@ References: design_doc §21 (Acceptance Criteria for Version 1).
 - [ ] P1 Random policy baseline is available.
 - [ ] P1 Pixel DQN baseline is available.
 - [ ] P1 Frozen JEPA + DQN baseline is available.
-- [ ] P1 Joint JEPA + DQN is available.
+- [x] P1 Joint JEPA + DQN is available.
 - [ ] P1 JEPA collapse metrics are available.
 - [ ] P1 Breakout-like benchmark shows JEPA+DQN outperforming random.
 - [ ] P1 Breakout-like benchmark shows JEPA+DQN matching or exceeding pixel-DQN sample efficiency.

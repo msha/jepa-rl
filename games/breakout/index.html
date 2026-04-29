@@ -129,12 +129,15 @@
       const brickRows = 5;
       const brickCols = 10;
       const brickGap = 6;
-      const brickW = 54;
+      const brickW = 58;
       const brickH = 18;
-      const brickOffsetX = 35;
+      const brickOffsetX = Math.floor((canvas.width - brickCols * brickW - (brickCols - 1) * brickGap) / 2);
       const brickOffsetY = 52;
       const WAVE_THRESHOLD = 10; // spawn new wave when fewer than this many alive
       const DANGER_Y = 360;     // bricks past this y trigger game over
+
+      const REF_DT = 1000 / 60;
+      let lastFrameTime = 0;
 
       let bricks = [];
       let particles = [];
@@ -255,6 +258,8 @@
         serving = true;
         ball.vx = 0;
         ball.vy = 0;
+        ball.x = paddle.x + paddle.w / 2;
+        ball.y = paddle.y - ball.r - 2;
       }
 
       function launchBall() {
@@ -342,33 +347,24 @@
         return dx * dx + dy * dy <= circle.r * circle.r;
       }
 
-      function update() {
+      function update(dt) {
         if (done) return;
 
-        // AI auto-start — skip waiting screen in embed mode
-        if (waiting && isAI()) {
-          waiting = false;
-        }
         if (waiting) return;
-
-        // AI auto-serve — launch ball immediately in embed mode
-        if (serving && isAI()) {
-          launchBall();
-        }
 
         // Paddle: acceleration-based movement
         if (keys.has("ArrowLeft")) {
-          paddle.vx -= paddle.accel;
+          paddle.vx -= paddle.accel * dt;
         } else if (keys.has("ArrowRight")) {
-          paddle.vx += paddle.accel;
+          paddle.vx += paddle.accel * dt;
         } else {
-          paddle.vx *= paddle.friction;
+          paddle.vx *= Math.pow(paddle.friction, dt);
         }
         paddle.vx = Math.max(-paddle.maxSpeed, Math.min(paddle.maxSpeed, paddle.vx));
         if (Math.abs(paddle.vx) < 0.1 && !keys.has("ArrowLeft") && !keys.has("ArrowRight")) {
           paddle.vx = 0;
         }
-        paddle.x += paddle.vx;
+        paddle.x += paddle.vx * dt;
         paddle.x = Math.max(0, Math.min(canvas.width - paddle.w, paddle.x));
 
         // Ball follows paddle while serving
@@ -378,8 +374,8 @@
           return;
         }
 
-        ball.x += ball.vx;
-        ball.y += ball.vy;
+        ball.x += ball.vx * dt;
+        ball.y += ball.vy * dt;
 
         // Wall bounces
         if (ball.x <= ball.r) {
@@ -437,7 +433,6 @@
             spawnParticles(brick.x + brick.w / 2, brick.y + brick.h / 2, colors[brick.row % colors.length], 8);
           } else {
             score += 2;
-            // partial hit flash — dimmer
             flashes.push({ x: brick.x, y: brick.y, w: brick.w, h: brick.h, life: 0.5 });
           }
           flashes.push({ x: brick.x, y: brick.y, w: brick.w, h: brick.h, life: brick.hp <= 0 ? 1.0 : 0.5 });
@@ -471,16 +466,16 @@
         // Update particles
         for (let i = particles.length - 1; i >= 0; i -= 1) {
           const p = particles[i];
-          p.x += p.vx;
-          p.y += p.vy;
-          p.vy += 0.05; // gravity
-          p.life -= p.decay;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.vy += 0.05 * dt;
+          p.life -= p.decay * dt;
           if (p.life <= 0) particles.splice(i, 1);
         }
 
         // Update flashes
         for (let i = flashes.length - 1; i >= 0; i -= 1) {
-          flashes[i].life -= 0.08;
+          flashes[i].life -= 0.08 * dt;
           if (flashes[i].life <= 0) flashes.splice(i, 1);
         }
 
@@ -641,15 +636,17 @@
         }
       }
 
-      function loop() {
-        update();
+      function loop(now) {
+        const dt = Math.min((now - (lastFrameTime || now)) / REF_DT, 3);
+        lastFrameTime = now;
+        update(dt);
         draw();
         requestAnimationFrame(loop);
       }
 
       resetGame();
       canvas.focus();
-      loop();
+      loop(performance.now());
 
       if (window.location.search.includes("embed")) {
         document.body.classList.add("embed");

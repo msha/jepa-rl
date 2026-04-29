@@ -325,14 +325,18 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     )
                     return
             algorithm = eval_config.agent.algorithm
-            expected_suffix = ".pt" if algorithm in {"dqn", "frozen_jepa_dqn"} else ".npz"
+            pt_algs = {"dqn", "frozen_jepa_dqn", "joint_jepa_dqn"}
+            expected_suffix = ".pt" if algorithm in pt_algs else ".npz"
             ckpt_name = body.get("checkpoint")
             if ckpt_name:
                 if not ckpt_name.endswith(expected_suffix):
                     self._send_json(
                         {
                             "ok": False,
-                            "error": f"checkpoint {ckpt_name} is not a {algorithm} checkpoint (expected {expected_suffix})",
+                            "error": (
+                                f"checkpoint {ckpt_name} is not a {algorithm} "
+                                f"checkpoint (expected {expected_suffix})"
+                            ),
                         },
                         status=400,
                     )
@@ -399,6 +403,28 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     load_torch_checkpoint(checkpoint, model=net, target_model=None, optimizer=None)
                     net.eval()
                     model = net
+                elif algorithm == "joint_jepa_dqn":
+                    import torch as _torch
+
+                    from jepa_rl.models.device import resolve_torch_device
+                    from jepa_rl.models.jepa import JepaWorldModel, JepaWorldModelConfig
+                    from jepa_rl.models.joint_jepa_dqn import LatentQHead
+
+                    device = resolve_torch_device(eval_config.experiment.device)
+                    _jstate = _torch.load(checkpoint, map_location="cpu", weights_only=False)
+                    _jepa_cfg = JepaWorldModelConfig.from_project_config(eval_config)
+                    _jepa_enc = JepaWorldModel(_jepa_cfg).to(device)
+                    _jepa_enc.load_state_dict(_jstate["jepa_model"])
+                    _jepa_enc.eval()
+                    _q_head = LatentQHead(
+                        latent_dim=eval_config.world_model.latent_dim,
+                        num_actions=eval_config.actions.num_actions,
+                        hidden_dims=eval_config.agent.q_network.hidden_dims,
+                        dueling=eval_config.agent.q_network.dueling,
+                    ).to(device)
+                    _q_head.load_state_dict(_jstate["q_net"])
+                    _q_head.eval()
+                    model = (_jepa_enc, _q_head)
                 elif algorithm == "linear_q":
                     from jepa_rl.training.simple_q import LinearQModel
 
@@ -497,6 +523,14 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                     obs_t = torch.from_numpy(obs[None]).to(device)
                     with torch.no_grad():
                         action_idx = int(model(obs_t).argmax(dim=1).item())
+                elif algorithm == "joint_jepa_dqn":
+                    import torch
+
+                    _jepa_m, _q_m = model
+                    obs_t = torch.from_numpy(obs[None]).float().to(device)
+                    with torch.no_grad():
+                        _z = _jepa_m.encode(obs_t)
+                        action_idx = int(_q_m(_z).argmax(dim=1).item())
                 else:
                     from jepa_rl.envs.browser_game_env import Observation
                     from jepa_rl.training.simple_q import featurize_observation
@@ -932,12 +966,28 @@ def _training_worker(
                     )
                     if not candidates:
                         raise ValueError(
-                            "No JEPA checkpoint found. Run train-world first or provide a JEPA checkpoint path."
+                            "No JEPA checkpoint found. Run train-world first or "
+                            "provide a JEPA checkpoint path."
                         )
                     jepa_checkpoint = candidates[0]
             train_frozen_jepa_dqn(
                 state.config,
                 jepa_checkpoint=jepa_checkpoint,
+                experiment=run_name,
+                steps=steps,
+                learning_starts=learning_starts,
+                batch_size=batch_size,
+                dashboard_every=dashboard_every,
+                headless=not headed,
+                stop_event=stop_event,
+                screenshot_path=screenshot,
+                live_step_callback=live_step_callback,
+            )
+        elif algorithm == "joint_jepa_dqn":
+            from jepa_rl.training.joint_jepa_dqn import train_joint_jepa_dqn
+
+            train_joint_jepa_dqn(
+                state.config,
                 experiment=run_name,
                 steps=steps,
                 learning_starts=learning_starts,
@@ -1236,7 +1286,10 @@ def _list_checkpoints(run_dir: Path, algorithm: str | None = None) -> list[dict[
 _GAME_DESCRIPTIONS: dict[str, str] = {
     "breakout": "Destroy bricks with a bouncing ball. Don't let it fall!",
     "snake": "Eat food to grow longer. Avoid walls and yourself!",
-    "asteroids": "Shoot asteroids. Tough ones shrink when hit. Slimy ones spread moss that shields and regenerates. Collect power-ups!",
+    "asteroids": (
+        "Shoot asteroids. Tough ones shrink when hit. Slimy ones spread moss "
+        "that shields and regenerates. Collect power-ups!"
+    ),
 }
 
 
@@ -1274,7 +1327,10 @@ def _build_config_detail(config: ProjectConfig) -> list[dict[str, Any]]:
                     "algorithm",
                     config.agent.algorithm,
                     "RL algorithm",
-                    {"type": "select", "options": ["dqn", "frozen_jepa_dqn", "linear_q"]},
+                    {
+                        "type": "select",
+                        "options": ["dqn", "frozen_jepa_dqn", "joint_jepa_dqn", "linear_q"],
+                    },
                 ),
                 (
                     "gamma",

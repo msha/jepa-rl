@@ -127,6 +127,8 @@
       let done = false;
       let waiting = true;   // waiting for Space to start
       let lastMove = 0;
+      let lastFrameTime = 0;
+      const REF_DT = 1000 / 60;
       let particles = [];
       const BOARD_KEY = "jeparl_snake";
 
@@ -318,11 +320,9 @@
       function update(now) {
         if (done) return;
 
-        // AI auto-start/resume — skip waiting screen in embed mode
-        if (waiting && isAI()) {
-          waiting = false;
-          lastMove = performance.now();
-        }
+        const dt = Math.min((now - (lastFrameTime || now)) / REF_DT, 3);
+        lastFrameTime = now;
+
         if (waiting) return;
 
         if (now - lastMove >= interval()) {
@@ -333,10 +333,10 @@
         // Update particles
         for (let i = particles.length - 1; i >= 0; i--) {
           const p = particles[i];
-          p.x += p.vx;
-          p.y += p.vy;
-          p.vy += 0.05;
-          p.life -= p.decay;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.vy += 0.05 * dt;
+          p.life -= p.decay * dt;
           if (p.life <= 0) particles.splice(i, 1);
         }
       }

@@ -136,6 +136,9 @@
       const MOSS_REGEN = 0.004;
       const MOSS_HIT = 0.5;
 
+      const REF_DT = 1000 / 60;
+      let lastFrameTime = 0;
+
       const keys = new Set();
       let ship = null;
       let asteroids = [];
@@ -347,37 +350,32 @@
         keys.delete(event.key);
       });
 
-      function update() {
+      function update(dt) {
         if (done) return;
-
-        // AI auto-start/resume — skip waiting screen in embed mode
-        if (waiting && !done && isAI()) {
-          waiting = false;
-        }
 
         // Waiting to start/respawn — drift asteroids in background
         if (waiting) {
           for (const a of asteroids) {
-            a.x += a.vx * 0.3;
-            a.y += a.vy * 0.3;
-            a.rotAngle += a.rotSpeed;
+            a.x += a.vx * 0.3 * dt;
+            a.y += a.vy * 0.3 * dt;
+            a.rotAngle += a.rotSpeed * dt;
             wrap(a);
           }
-          updateParticles();
+          updateParticles(dt);
           return;
         }
 
         // Ship controls
-        if (keys.has("ArrowLeft")) ship.angle -= TURN_SPEED;
-        if (keys.has("ArrowRight")) ship.angle += TURN_SPEED;
+        if (keys.has("ArrowLeft")) ship.angle -= TURN_SPEED * dt;
+        if (keys.has("ArrowRight")) ship.angle += TURN_SPEED * dt;
         if (keys.has("ArrowUp")) {
-          ship.vx += Math.cos(ship.angle) * THRUST;
-          ship.vy += Math.sin(ship.angle) * THRUST;
+          ship.vx += Math.cos(ship.angle) * THRUST * dt;
+          ship.vy += Math.sin(ship.angle) * THRUST * dt;
         }
 
         // Friction
-        ship.vx *= FRICTION;
-        ship.vy *= FRICTION;
+        ship.vx *= Math.pow(FRICTION, dt);
+        ship.vy *= Math.pow(FRICTION, dt);
 
         // Speed cap
         const spd = Math.sqrt(ship.vx * ship.vx + ship.vy * ship.vy);
@@ -386,12 +384,12 @@
           ship.vy = (ship.vy / spd) * MAX_SPEED;
         }
 
-        ship.x += ship.vx;
-        ship.y += ship.vy;
+        ship.x += ship.vx * dt;
+        ship.y += ship.vy * dt;
         wrap(ship);
 
         // Shooting
-        if (shootTimer > 0) shootTimer -= 1;
+        if (shootTimer > 0) shootTimer -= dt;
         const cooldown = buffs.rapid > 0 ? Math.floor(SHOOT_COOLDOWN / 2) : SHOOT_COOLDOWN;
         if (keys.has(" ") && shootTimer <= 0) {
           const angles = buffs.scatter > 0 ? [-SCATTER_ANGLE, 0, SCATTER_ANGLE] : [0];
@@ -412,27 +410,27 @@
         }
 
         // Invulnerability
-        if (invulnTimer > 0) invulnTimer -= 1;
+        if (invulnTimer > 0) invulnTimer -= dt;
 
         // Update bullets
         for (let i = bullets.length - 1; i >= 0; i--) {
           const b = bullets[i];
-          b.x += b.vx;
-          b.y += b.vy;
-          b.life -= 1;
+          b.x += b.vx * dt;
+          b.y += b.vy * dt;
+          b.life -= dt;
           wrap(b);
           if (b.life <= 0) bullets.splice(i, 1);
         }
 
         // Update asteroids
         for (const a of asteroids) {
-          a.x += a.vx;
-          a.y += a.vy;
-          a.rotAngle += a.rotSpeed;
+          a.x += a.vx * dt;
+          a.y += a.vy * dt;
+          a.rotAngle += a.rotSpeed * dt;
           wrap(a);
           // Moss regeneration
           if (a.moss > 0 && a.moss < (a.mossMax || 1)) {
-            a.moss = Math.min(a.mossMax || 1, a.moss + MOSS_REGEN);
+            a.moss = Math.min(a.mossMax || 1, a.moss + MOSS_REGEN * dt);
           }
         }
 
@@ -587,8 +585,8 @@
         // Power-up collection
         for (let i = powerups.length - 1; i >= 0; i--) {
           const p = powerups[i];
-          p.life -= 1;
-          p.phase += 0.05;
+          p.life -= dt;
+          p.phase += 0.05 * dt;
           if (p.life <= 0) { powerups.splice(i, 1); continue; }
           if (dist(ship.x, ship.y, p.x, p.y) < 18) {
             if (p.type === "rapid") buffs.rapid = RAPID_DURATION;
@@ -600,8 +598,8 @@
         }
 
         // Tick buffs
-        if (buffs.rapid > 0) buffs.rapid -= 1;
-        if (buffs.scatter > 0) buffs.scatter -= 1;
+        if (buffs.rapid > 0) buffs.rapid -= dt;
+        if (buffs.scatter > 0) buffs.scatter -= dt;
 
         // New wave
         if (asteroids.length === 0) {
@@ -609,22 +607,22 @@
           spawnWave();
         }
 
-        updateParticles();
+        updateParticles(dt);
       }
 
-      function updateParticles() {
+      function updateParticles(dt) {
         for (let i = particles.length - 1; i >= 0; i--) {
           const p = particles[i];
-          p.x += p.vx;
-          p.y += p.vy;
-          p.vy += 0.03;
-          p.life -= p.decay;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.vy += 0.03 * dt;
+          p.life -= p.decay * dt;
           if (p.life <= 0) particles.splice(i, 1);
         }
         for (let i = flashEffects.length - 1; i >= 0; i--) {
           const f = flashEffects[i];
-          f.radius += (f.maxRadius - f.radius) * 0.2;
-          f.life -= 0.06;
+          f.radius += (f.maxRadius - f.radius) * 0.2 * dt;
+          f.life -= 0.06 * dt;
           if (f.life <= 0) flashEffects.splice(i, 1);
         }
       }
@@ -841,15 +839,17 @@
         }
       }
 
-      function loop() {
-        update();
+      function loop(now) {
+        const dt = Math.min((now - (lastFrameTime || now)) / REF_DT, 3);
+        lastFrameTime = now;
+        update(dt);
         draw();
         requestAnimationFrame(loop);
       }
 
       resetGame();
       canvas.focus();
-      loop();
+      loop(performance.now());
 
       if (window.location.search.includes("embed")) {
         document.body.classList.add("embed");

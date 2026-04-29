@@ -48,7 +48,7 @@ Implemented now:
 - Full pixel DQN with dueling architecture, Double DQN, epsilon-greedy, target network.
 - JEPA world model with EMA target encoder, transformer predictor, multi-horizon prediction, collapse metrics.
 - Frozen JEPA + DQN: loads pretrained encoder, freezes it, trains Q-head on latents.
-- Playwright screenshot environment, DOM score reader, keyboard action spaces.
+- Playwright screenshot/canvas environment, DOM score reader, keyboard action spaces.
 - In-memory replay buffer with uniform and sequence sampling.
 - 162 unit tests covering all implemented contracts.
 
@@ -242,6 +242,8 @@ reward:
   type: score_delta
   score_reader: dom
   score_selector: "#score"
+  zero_score_patience_steps: 120
+  zero_score_penalty: 0.01
   privileged: false
 
 evaluation:

@@ -275,6 +275,8 @@ class RewardConfig:
     score_region: tuple[int, int, int, int] | None
     survival_bonus: float
     idle_penalty: float
+    zero_score_patience_steps: int
+    zero_score_penalty: float
     death_penalty: float
     clip_rewards: bool
     privileged: bool
@@ -311,6 +313,12 @@ class RewardConfig:
                 raise ConfigError("reward.score_region must be null or [x, y, width, height]")
             score_region = tuple(score_region_raw)  # type: ignore[assignment]
 
+        zero_score_penalty = _number(
+            data.get("zero_score_penalty", 0.0), "reward.zero_score_penalty"
+        )
+        if zero_score_penalty < 0.0:
+            raise ConfigError("reward.zero_score_penalty must be nonnegative")
+
         return cls(
             type=reward_type,
             score_reader=score_reader,
@@ -318,6 +326,11 @@ class RewardConfig:
             score_region=score_region,
             survival_bonus=_number(data.get("survival_bonus", 0.0), "reward.survival_bonus"),
             idle_penalty=_number(data.get("idle_penalty", 0.0), "reward.idle_penalty"),
+            zero_score_patience_steps=_nonnegative_int(
+                data.get("zero_score_patience_steps", 0),
+                "reward.zero_score_patience_steps",
+            ),
+            zero_score_penalty=zero_score_penalty,
             death_penalty=_number(data.get("death_penalty", 0.0), "reward.death_penalty"),
             clip_rewards=_bool(data.get("clip_rewards", False), "reward.clip_rewards"),
             privileged=privileged,
@@ -559,8 +572,10 @@ class AgentConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentConfig:
         algorithm = _str(data.get("algorithm", "dqn"), "agent.algorithm")
-        if algorithm not in {"dqn", "frozen_jepa_dqn", "linear_q"}:
-            raise ConfigError("agent.algorithm must be dqn, frozen_jepa_dqn, or linear_q")
+        if algorithm not in {"dqn", "frozen_jepa_dqn", "joint_jepa_dqn", "linear_q"}:
+            raise ConfigError(
+                "agent.algorithm must be dqn, frozen_jepa_dqn, joint_jepa_dqn, or linear_q"
+            )
         gamma = _positive_float(data.get("gamma", 0.997), "agent.gamma")
         if gamma >= 1.0:
             raise ConfigError("agent.gamma must be < 1.0")
@@ -679,6 +694,7 @@ class TrainingConfig:
     planning_start_step: int
     planning_eval_only_until: int
     eval_budgets: tuple[int, ...]
+    freeze_encoder: bool
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TrainingConfig:
@@ -715,6 +731,7 @@ class TrainingConfig:
                 _positive_int(v, "training.eval_budgets")
                 for v in data.get("eval_budgets", [100_000, 500_000, 1_000_000, 5_000_000])
             ),
+            freeze_encoder=_bool(data.get("freeze_encoder", False), "training.freeze_encoder"),
         )
 
 

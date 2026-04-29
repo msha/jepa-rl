@@ -47,6 +47,8 @@ reward:
   score_region: null
   survival_bonus: 0.0
   idle_penalty: 0.0
+  zero_score_patience_steps: 120
+  zero_score_penalty: 0.01
   death_penalty: 0.0
   clip_rewards: false
   privileged: false
@@ -142,6 +144,7 @@ training:
   train_every: 4
   world_updates_per_env_step: 1
   policy_updates_per_env_step: 1
+  freeze_encoder: false
   eval_interval_steps: 50000
   checkpoint_interval_steps: 50000
   planning_start_step: 1000000
