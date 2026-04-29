@@ -34,6 +34,11 @@ test-results/
 # Academic papers (stored locally, not pushed to GitHub)
 docs/*.pdf
 
+# Screenshots
+*.png
+*.jpg
+*.jpeg
+
 # OS/editor
 .DS_Store
 .idea/
