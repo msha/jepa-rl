@@ -31,6 +31,8 @@ export interface CollectJob {
   episodes_done: number
   episodes_target: number
   mean_score: number
+  total_steps: number
+  avg_steps: number
   error: string | null
   started_at: number
   completed_at: number | null
@@ -55,6 +57,7 @@ export const useTrainingStore = defineStore('training', () => {
   const baseModelInfo = ref<Record<string, unknown>>({})
   const modelInfo = ref<Record<string, unknown>>({})
   const gameName = ref('')
+  const jepaCheckpoints = ref<{ file: string; label: string }[]>([])
 
   const isTraining = computed(() => !!job.value?.running || job.value?.status === 'running' || job.value?.status === 'starting')
   const isEvaluating = computed(() => !isTraining.value && (!!evalJob.value?.running || evalJob.value?.status === 'running'))
@@ -97,6 +100,7 @@ export const useTrainingStore = defineStore('training', () => {
       gameName.value = cfg?.game || ''
       baseModelInfo.value = (data.base_model_info as Record<string, unknown>) || {}
       modelInfo.value = (data.model_info as Record<string, unknown>) || {}
+      jepaCheckpoints.value = (data.jepa_checkpoints as { file: string; label: string }[]) || []
     } catch { /* swallow */ }
   }
 
@@ -120,7 +124,7 @@ export const useTrainingStore = defineStore('training', () => {
     }
   }
 
-  async function startCollect(params: { experiment?: string; episodes?: number; max_steps?: number; headed?: boolean; save_frames?: boolean }) {
+  async function startCollect(params: { experiment?: string; episodes?: number; max_steps?: number; headed?: boolean; save_frames?: boolean; existing?: boolean }) {
     await api('/api/collect-random/start', params as Record<string, unknown>)
     await refresh()
   }
@@ -146,7 +150,7 @@ export const useTrainingStore = defineStore('training', () => {
     summary, latestStep, steps, episodes,
     job, evalJob, worldJob, collectJob, evalResult,
     gameSettings, baseConfigDetail, configDetail, runDir, resetKey, actionKeys,
-    baseModelInfo, modelInfo, gameName,
+    baseModelInfo, modelInfo, gameName, jepaCheckpoints,
     isTraining, isEvaluating, isWorldTraining, isCollecting, headerStatus,
     chartPoints, refresh, validateConfig, runMlSmoke,
     startCollect, stopCollect, startWorldTraining, stopWorldTraining,

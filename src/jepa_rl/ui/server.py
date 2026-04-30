@@ -67,6 +67,10 @@ class CollectJob:
     completed_at: float | None = None
     save_frames: bool = False
     scores: list[float] = field(default_factory=list)
+    episode_lengths: list[int] = field(default_factory=list)
+    max_steps_per_episode: int = 0
+    steps_in_episode: int = 0
+    total_steps: int = 0
 
 
 @dataclass
@@ -216,6 +220,8 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 self._handle_validate_config()
             elif parsed.path == "/api/open-game":
                 self._handle_open_game()
+            elif parsed.path == "/api/open-folder":
+                self._handle_open_folder()
             elif parsed.path == "/api/ml-smoke":
                 self._handle_ml_smoke()
             elif parsed.path == "/api/collect-random/start":
@@ -663,6 +669,30 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
             except Exception as exc:  # noqa: BLE001
                 self._send_json({"ok": False, "error": str(exc)}, status=500)
 
+        def _handle_open_folder(self) -> None:
+            import subprocess
+            import sys
+
+            body = self._read_json_body()
+            path = str(body.get("path") or "")
+            if not path:
+                self._send_json({"ok": False, "error": "path required"}, status=400)
+                return
+            folder = Path(path)
+            if not folder.is_dir():
+                self._send_json({"ok": False, "error": f"not a directory: {path}"}, status=400)
+                return
+            try:
+                if sys.platform == "darwin":
+                    subprocess.Popen(["open", str(folder)])
+                elif sys.platform == "win32":
+                    subprocess.Popen(["explorer", str(folder)])
+                else:
+                    subprocess.Popen(["xdg-open", str(folder)])
+                self._send_json({"ok": True})
+            except Exception as exc:  # noqa: BLE001
+                self._send_json({"ok": False, "error": str(exc)}, status=500)
+
         def _handle_ml_smoke(self) -> None:
             body = self._read_json_body()
             steps = int(body.get("steps") or 2000)
@@ -701,8 +731,15 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 max_steps = int(body.get("max_steps") or 200)
                 headed = bool(body.get("headed", False))
                 save_frames = bool(body.get("save_frames", False))
+                existing = bool(body.get("existing", False))
                 run_dir = create_run_dir(state.config.experiment.output_dir, run_name)
-                snapshot_config(state.config, run_dir / "config.yaml")
+                collect_config = dataclasses.replace(
+                    state.config,
+                    experiment=dataclasses.replace(
+                        state.config.experiment, name=run_name
+                    ),
+                )
+                snapshot_config(collect_config, run_dir / "config.yaml")
                 stop_event = threading.Event()
                 if headed:
                     # Server-driven mode: background Playwright worker
@@ -716,6 +753,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                             args=(
                                 state, run_name, run_dir,
                                 episodes, max_steps, headed, stop_event,
+                                existing,
                             ),
                             daemon=True,
                         ),
@@ -733,6 +771,7 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                         stop_event=stop_event,
                         thread=dummy_thread,
                         save_frames=save_frames,
+                        max_steps_per_episode=max_steps,
                     )
                     cj.status = "running"
                     state.collect_job = cj
@@ -780,17 +819,37 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 except Exception:  # noqa: BLE001
                     pass
 
+            with state.lock:
+                cj.steps_in_episode += 1
+                # Enforce max steps per episode
+                if (
+                    not is_done
+                    and cj.max_steps_per_episode > 0
+                    and cj.steps_in_episode >= cj.max_steps_per_episode
+                ):
+                    is_done = True
+
             if is_done:
                 with state.lock:
+                    steps_this_ep = cj.steps_in_episode
                     cj.scores.append(score)
+                    cj.episode_lengths.append(steps_this_ep)
                     cj.episodes_done += 1
                     cj.mean_score = float(sum(cj.scores) / len(cj.scores))
+                    cj.total_steps += steps_this_ep
+                    cj.steps_in_episode = 0
                     ep_count = cj.episodes_done
                     ep_target = cj.episodes_target
                     complete = ep_count >= ep_target
                     if complete:
                         cj.status = "completed"
                         cj.completed_at = time.time()
+                    _write_collect_episode(
+                        cj.run_dir, ep_count - 1, score,
+                        steps_this_ep,
+                        cj.scores,
+                        cj.episode_lengths,
+                    )
                 self._send_json(
                     {"ok": True, "done": True, "complete": complete, "episode": ep_count}
                 )
@@ -933,6 +992,12 @@ def _make_handler(state: UiState) -> type[BaseHTTPRequestHandler]:
                 if active_snapshot.exists():
                     world_config = load_config(active_snapshot)
                 run_dir = create_run_dir(world_config.experiment.output_dir, run_name)
+                world_config = dataclasses.replace(
+                    world_config,
+                    experiment=dataclasses.replace(
+                        world_config.experiment, name=run_name
+                    ),
+                )
                 snapshot_config(world_config, run_dir / "config.yaml")
                 stop_event = threading.Event()
                 wj = TrainingJob(
@@ -1284,6 +1349,51 @@ def _training_worker(
             state.job.completed_at = time.time()
 
 
+def _write_collect_episode(
+    run_dir: Path,
+    episode_idx: int,
+    score: float,
+    steps: int,
+    all_scores: list[float],
+    all_lengths: list[int] | None = None,
+) -> None:
+    """Append an episode record to the collection metrics file and update summary."""
+    import json
+    import statistics
+
+    metrics_path = run_dir / "metrics" / "random_events.jsonl"
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "type": "episode",
+        "episode": episode_idx,
+        "score": score,
+        "steps": steps,
+        "return": 0.0,
+    }
+    with metrics_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+    # Update summary
+    if all_scores:
+        sorted_scores = sorted(all_scores)
+        n = len(sorted_scores)
+        summary: dict[str, Any] = {
+            "total_episodes": n,
+            "score_mean": statistics.mean(all_scores),
+            "score_median": statistics.median(all_scores),
+            "score_p95": sorted_scores[min(int(n * 0.95), n - 1)],
+            "score_p5": sorted_scores[min(int(n * 0.05), n - 1)],
+            "score_max": max(all_scores),
+            "score_min": min(all_scores),
+        }
+        if all_lengths:
+            summary["mean_episode_length"] = statistics.mean(all_lengths)
+            summary["total_steps"] = sum(all_lengths)
+        summary_path = run_dir / "random_baseline_summary.json"
+        with summary_path.open("w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+            f.write("\n")
+
+
 def _collect_random_worker(
     state: UiState,
     run_name: str,
@@ -1292,6 +1402,7 @@ def _collect_random_worker(
     max_steps: int,
     headed: bool,
     stop_event: threading.Event,
+    existing: bool = False,
 ) -> None:
     import json
     import random
@@ -1306,11 +1417,29 @@ def _collect_random_worker(
 
         metrics_path = run_dir / "metrics" / "random_events.jsonl"
         rng = random.Random(state.config.experiment.seed)
+
+        # If continuing, count existing episodes to offset numbering
+        episode_offset = 0
+        existing_episodes_data: list[dict[str, Any]] = []
+        if existing and metrics_path.exists():
+            with metrics_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            rec = json.loads(line)
+                            existing_episodes_data.append(rec)
+                            if rec.get("episode", 0) >= episode_offset:
+                                episode_offset = rec["episode"] + 1
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+
         episodes_data: list[dict[str, Any]] = []
+        file_mode = "a" if existing else "w"
 
         with (
             PlaywrightBrowserGameEnv(state.config, headless=not headed, run_dir=run_dir) as env,
-            metrics_path.open("w", encoding="utf-8") as metrics,
+            metrics_path.open(file_mode, encoding="utf-8") as metrics,
         ):
             for episode in range(episodes):
                 if stop_event.is_set():
@@ -1331,7 +1460,7 @@ def _collect_random_worker(
                         break
                 record: dict[str, Any] = {
                     "type": "episode",
-                    "episode": episode,
+                    "episode": episode_offset + episode,
                     "return": episode_return,
                     "score": score,
                     "steps": steps_taken,
@@ -1345,6 +1474,8 @@ def _collect_random_worker(
                         state.collect_job.mean_score = float(
                             sum(scores_so_far) / len(scores_so_far)
                         )
+                        state.collect_job.episode_lengths.append(steps_taken)
+                        state.collect_job.total_steps += steps_taken
     except Exception as exc:  # noqa: BLE001
         with state.lock:
             if state.collect_job is not None:
@@ -1353,9 +1484,11 @@ def _collect_random_worker(
                 state.collect_job.completed_at = time.time()
         return
 
-    if episodes_data:
-        scores = [ep["score"] for ep in episodes_data]
-        lengths = [ep["steps"] for ep in episodes_data]
+    # Combine existing + new data for summary
+    all_episodes = existing_episodes_data + episodes_data
+    if all_episodes:
+        scores = [ep["score"] for ep in all_episodes]
+        lengths = [ep["steps"] for ep in all_episodes]
         sorted_scores = sorted(scores)
         n = len(sorted_scores)
         summary: dict[str, Any] = {
@@ -1367,6 +1500,7 @@ def _collect_random_worker(
             "score_max": max(scores),
             "score_min": min(scores),
             "mean_episode_length": statistics.mean(lengths),
+            "total_steps": sum(lengths),
         }
         summary_path = run_dir / "random_baseline_summary.json"
         with summary_path.open("w", encoding="utf-8") as f:
@@ -1395,6 +1529,10 @@ def _train_world_worker(
         if state.world_job is not None:
             state.world_job.status = "running"
 
+    def live_step_callback(event: dict[str, Any]) -> None:
+        with state.lock:
+            state.world_step_events.append(event)
+
     try:
         from jepa_rl.training.jepa_world import train_jepa_world
 
@@ -1408,6 +1546,7 @@ def _train_world_worker(
             dashboard_every=dashboard_every,
             headless=not headed,
             stop_event=stop_event,
+            live_step_callback=live_step_callback,
         )
     except Exception as exc:  # noqa: BLE001
         with state.lock:
@@ -1640,6 +1779,18 @@ def _list_checkpoints(run_dir: Path, algorithm: str | None = None) -> list[dict[
     return result
 
 
+def _list_jepa_checkpoints(state: UiState) -> list[dict[str, str]]:
+    output_dir = Path(state.config.experiment.output_dir)
+    result: list[dict[str, str]] = []
+    for ckpt in sorted(output_dir.glob("*_world/checkpoints/*.pt"), reverse=True):
+        run_name = ckpt.parent.parent.name
+        result.append({
+            "file": str(ckpt),
+            "label": f"{run_name}/{ckpt.stem.replace('_', ' ')}",
+        })
+    return result
+
+
 _GAME_DESCRIPTIONS: dict[str, str] = {
     "breakout": "Destroy bricks with a bouncing ball. Don't let it fall!",
     "snake": "Eat food to grow longer. Avoid walls and yourself!",
@@ -1739,12 +1890,12 @@ def _build_config_detail(config: ProjectConfig) -> list[dict[str, Any]]:
                 ),
                 (
                     "action_repeat", config.game.action_repeat,
-                    "How many times each action is repeated.",
+                    f"Frames each action is held (~{config.game.action_repeat / config.game.fps * 1000:.0f}ms/step at {config.game.fps}fps).",
                     {"type": "number", "min": 1, "label": "Action repeat"},
                 ),
                 (
                     "max_steps_per_episode", config.game.max_steps_per_episode,
-                    "Max steps before forcing episode end.",
+                    f"Max decisions per episode (~{config.game.max_steps_per_episode * config.game.action_repeat / config.game.fps:.0f}s at current settings).",
                     {"type": "number", "min": 100, "label": "Max steps"},
                 ),
                 (
@@ -1998,34 +2149,43 @@ def list_collected_datasets(state: UiState) -> dict[str, Any]:
             summary_path = child / "random_baseline_summary.json"
             if child.is_dir() and summary_path.exists():
                 summary = _read_json(summary_path)
-                events_path = child / "metrics" / "random_events.jsonl"
-                total_steps = 0
-                if events_path.exists():
-                    with contextlib.suppress(Exception):
-                        total_steps = sum(
-                            1
-                            for _ in events_path.open(encoding="utf-8")
-                        )
+                total_steps = summary.get("total_steps", 0)
                 dir_size = 0
+                images_count = 0
+                images_size = 0
+                frames_dir = child / "frames"
                 try:
                     for f in child.rglob("*"):
                         if f.is_file():
-                            dir_size += f.stat().st_size
+                            fsize = f.stat().st_size
+                            dir_size += fsize
+                            if frames_dir in f.parents or f.parent == child and f.suffix in (".png", ".jpg"):
+                                images_count += 1
+                                images_size += fsize
                 except Exception:  # noqa: BLE001
                     pass
-                datasets.append(
-                    {
-                        "name": child.name,
-                        "episodes": summary.get("total_episodes", 0),
-                        "mean_score": summary.get("score_mean"),
-                        "max_score": summary.get("score_max"),
-                        "min_score": summary.get("score_min"),
-                        "median_score": summary.get("score_median"),
-                        "mean_length": summary.get("mean_episode_length"),
-                        "total_steps": total_steps,
-                        "size_bytes": dir_size,
-                    }
-                )
+                # Extract game name from dataset name: <game>-rand-act-<n>
+                ds_name = child.name
+                game = ""
+                if ds_name.endswith("-rand-act") or "-rand-act-" in ds_name:
+                    game = ds_name.rsplit("-rand-act", 1)[0]
+                ds_info: dict[str, Any] = {
+                    "name": ds_name,
+                    "game": game,
+                    "episodes": summary.get("total_episodes", 0),
+                    "mean_score": summary.get("score_mean"),
+                    "max_score": summary.get("score_max"),
+                    "min_score": summary.get("score_min"),
+                    "median_score": summary.get("score_median"),
+                    "mean_length": summary.get("mean_episode_length"),
+                    "total_steps": total_steps,
+                    "size_bytes": dir_size,
+                }
+                if images_count > 0:
+                    ds_info["images_count"] = images_count
+                    ds_info["images_size"] = images_size
+                    ds_info["images_dir"] = str(frames_dir if frames_dir.exists() else child)
+                datasets.append(ds_info)
     return {"datasets": datasets}
 
 
@@ -2035,7 +2195,12 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
         eval_job = state.eval_job
         world_job = state.world_job
         collect_job = state.collect_job
-        run_dir = job.run_dir if job is not None else state.run_dir
+        if job is not None:
+            run_dir = job.run_dir
+        elif world_job is not None and world_job.thread.is_alive():
+            run_dir = world_job.run_dir
+        else:
+            run_dir = state.run_dir
         base_config = state.config
     summary = _read_json(run_dir / "metrics" / "train_summary.json")
     events = _read_jsonl(run_dir / "metrics" / "train_events.jsonl")
@@ -2048,6 +2213,7 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
             active_config = load_config(snapshot)
     with state.lock:
         live_step_events = list(state.live_step_events)
+        world_step_events = list(state.world_step_events)
         job_payload = None
         if job is not None:
             job_payload = {
@@ -2093,17 +2259,24 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
                 "episodes_done": collect_job.episodes_done,
                 "episodes_target": collect_job.episodes_target,
                 "mean_score": collect_job.mean_score,
+                "total_steps": collect_job.total_steps,
+                "avg_steps": (
+                    float(sum(collect_job.episode_lengths) / len(collect_job.episode_lengths))
+                    if collect_job.episode_lengths
+                    else 0.0
+                ),
                 "error": collect_job.error,
                 "started_at": collect_job.started_at,
                 "completed_at": collect_job.completed_at,
                 "running": collect_job.status == "running",
             }
 
-    if live_step_events:
+    active_live_events = live_step_events or world_step_events
+    if active_live_events:
         merged_by_step = {
             int(event["step"]): event for event in step_events if isinstance(event.get("step"), int)
         }
-        for event in live_step_events:
+        for event in active_live_events:
             if isinstance(event.get("step"), int):
                 merged_by_step[int(event["step"])] = event
         step_events = [merged_by_step[key] for key in sorted(merged_by_step)]
@@ -2149,6 +2322,7 @@ def build_state_payload(state: UiState) -> dict[str, Any]:
         "episodes": episode_events[-100:],
         "base_model_info": _build_model_info(base_config),
         "model_info": _build_model_info(active_config),
+        "jepa_checkpoints": _list_jepa_checkpoints(state),
     }
     return payload
 

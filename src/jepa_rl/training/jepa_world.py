@@ -53,6 +53,7 @@ def train_jepa_world(
     env_factory: Callable[[ProjectConfig, bool | None], BrowserGameEnv] | None = None,
     headless: bool | None = None,
     resume_checkpoint: Path | None = None,
+    live_step_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> JepaWorldTrainSummary:
     if steps <= 0:
         raise ValueError("steps must be positive")
@@ -123,7 +124,9 @@ def train_jepa_world(
         else max(config.replay.capacity // 10, sequence_length * effective_batch_size * 4)
     )
     replay = _collect_random_data(
-        config, effective_collect_steps, py_rng, env_factory, headless
+        config, effective_collect_steps, py_rng, env_factory, headless,
+        stop_event=stop_event,
+        progress_callback=live_step_callback,
     )
 
     if len(replay) < sequence_length:
@@ -168,6 +171,9 @@ def train_jepa_world(
             final_metrics = step_metrics
 
             writer.write({"type": "step", **step_metrics})
+
+            if live_step_callback is not None:
+                live_step_callback({"type": "step", **step_metrics})
 
             if dashboard_every and actual_step % dashboard_every == 0:
                 writer.flush()
@@ -251,6 +257,8 @@ def _collect_random_data(
     py_rng: random.Random,
     env_factory: Callable[[ProjectConfig, bool | None], BrowserGameEnv],
     headless: bool | None,
+    stop_event: Event | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> ReplayBuffer:
     replay = ReplayBuffer(capacity=max(config.replay.capacity, collect_steps))
     env_instance = env_factory(config, headless)
@@ -259,6 +267,8 @@ def _collect_random_data(
     with _env_context(env_instance) as env:
         obs = env.reset()
         for step in range(collect_steps):
+            if stop_event is not None and stop_event.is_set():
+                break
             action = py_rng.randrange(config.actions.num_actions)
             result = env.step(action)
             replay.add(
@@ -278,6 +288,19 @@ def _collect_random_data(
             if result.done:
                 episode_id += 1
                 obs = env.reset()
+            if progress_callback is not None and step % 10 == 0:
+                progress_callback({
+                    "type": "step",
+                    "step": 0,
+                    "phase": "collecting",
+                    "collect_step": step + 1,
+                    "collect_total": collect_steps,
+                    "episodes": episode_id,
+                    "replay_size": len(replay),
+                    "latest_reward": result.reward,
+                    "latest_score": result.score,
+                    "latest_done": result.done,
+                })
 
     return replay
 

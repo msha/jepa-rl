@@ -37,7 +37,7 @@ class ActionConditionedPredictor(nn.Module):
             batch_first=True,
             norm_first=True,
         )
-        self.transformer = nn.TransformerEncoder(layer, num_layers=depth)
+        self.transformer = nn.TransformerEncoder(layer, num_layers=depth, enable_nested_tensor=False)
         self.output = nn.Sequential(
             nn.LayerNorm(hidden_dim),
             nn.Linear(hidden_dim, hidden_dim),

@@ -405,10 +405,6 @@ onBeforeUnmount(() => {
     if (clickLitTimer) clearTimeout(clickLitTimer);
 });
 
-function toggleGame() {
-    showGame.value = !showGame.value;
-}
-
 function gameAction(action: string) {
     if (action === "space") {
         spaceNeeded.value = false;
@@ -524,6 +520,7 @@ async function runCollectStep() {
         });
         const data = (await res.json()) as {
             ok?: boolean;
+            done?: boolean;
             action?: string;
             complete?: boolean;
             error?: string;
@@ -535,7 +532,8 @@ async function runCollectStep() {
             stopCollectLoop();
             return;
         }
-        if (isDone) {
+        const episodeDone = isDone || data.done;
+        if (episodeDone) {
             window.setTimeout(() => {
                 reloadGame();
                 scheduleCollectEpisodeStart();
@@ -943,6 +941,10 @@ onBeforeUnmount(() => {
         @keyup="onKeyUp"
     >
         <div class="game-header">
+            <div class="gh-left">
+                <span class="gh-title" id="gameTitle">{{ gameTitle }}</span>
+                <span class="gh-status" id="gameStatus">{{ gameStatus }}</span>
+            </div>
             <VDropdown
                 v-model="selectedConfig"
                 :options="configOptions"
@@ -950,22 +952,20 @@ onBeforeUnmount(() => {
                 title="Available game configs in configs/games/"
                 compact
             />
-            <span class="gh-title" id="gameTitle">{{ gameTitle }}</span>
-            <span class="gh-status" id="gameStatus">{{ gameStatus }}</span>
-            <span class="gh-stat" id="gameStats" v-html="gameStats"></span>
+            <div class="gh-right">
+                <span class="gh-stat" id="gameStats" v-html="gameStats"></span>
+            </div>
         </div>
 
         <div class="game-body" v-show="showGame">
-            <div class="game-frame-wrap">
-                <iframe
-                    ref="gameFrame"
-                    id="gameFrame"
-                    :src="gameSrc"
-                    scrolling="no"
-                    style="overflow: hidden"
-                    title="Game canvas"
-                ></iframe>
-            </div>
+            <iframe
+                ref="gameFrame"
+                id="gameFrame"
+                :src="gameSrc"
+                scrolling="no"
+                style="overflow: hidden"
+                title="Game canvas"
+            ></iframe>
             <div
                 v-if="isIdle && !gameFocused && !gameOver"
                 class="game-overlay game-overlay-click"
@@ -1184,10 +1184,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .game-focused {
     animation: crt-flicker 0.06s infinite;
-    box-shadow:
-        0 0 10px rgba(100, 168, 255, 0.35),
-        0 0 28px rgba(100, 168, 255, 0.18),
-        0 0 56px rgba(100, 168, 255, 0.08);
     background:
         radial-gradient(
             circle at center,
@@ -1208,6 +1204,11 @@ onBeforeUnmount(() => {
         #08080a;
 }
 .game-focused .game-body {
+    position: relative;
+    z-index: 1;
+    animation: crt-glow 1.4s ease-in-out infinite;
+    outline: 1px solid rgba(100, 168, 255, 0.15);
+    outline-offset: -1px;
     background:
         repeating-linear-gradient(
             0deg,
@@ -1227,65 +1228,36 @@ onBeforeUnmount(() => {
 .game-body {
     position: relative;
 }
-.game-frame-wrap {
-    position: relative;
-    overflow: hidden;
-    isolation: isolate;
-}
-.game-focused .game-frame-wrap::after {
-    content: "";
-    position: absolute;
-    inset: -50%;
-    z-index: 1;
-    pointer-events: none;
-    mix-blend-mode: screen;
-    opacity: 0.08;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-    background-size: 256px 256px;
-    animation: noise-shift 0.08s steps(5) infinite;
-}
 @keyframes crt-flicker {
     0%,
     100% {
         filter: brightness(1);
     }
-    10% {
-        filter: brightness(0.965);
-    }
-    20% {
-        filter: brightness(1);
-    }
-    40% {
-        filter: brightness(0.975);
-    }
-    50% {
-        filter: brightness(1.008);
-    }
-    70% {
-        filter: brightness(0.97);
-    }
-    85% {
-        filter: brightness(1);
-    }
-}
-@keyframes noise-shift {
-    0% {
-        transform: translate(0, 0);
-    }
-    20% {
-        transform: translate(-12px, -6px);
-    }
-    40% {
-        transform: translate(6px, 10px);
+    30% {
+        filter: brightness(0.985);
     }
     60% {
-        transform: translate(-8px, 4px);
+        filter: brightness(1.004);
     }
     80% {
-        transform: translate(10px, -8px);
+        filter: brightness(0.99);
     }
+}
+@keyframes crt-glow {
+    0%,
     100% {
-        transform: translate(0, 0);
+        box-shadow:
+            0 0 8px 3px rgba(100, 168, 255, 0.28),
+            0 0 22px 8px rgba(100, 168, 255, 0.14),
+            0 0 50px 18px rgba(100, 168, 255, 0.06),
+            0 0 80px 28px rgba(100, 168, 255, 0.02);
+    }
+    50% {
+        box-shadow:
+            0 0 8px 3px rgba(100, 168, 255, 0.38),
+            0 0 22px 8px rgba(100, 168, 255, 0.18),
+            0 0 50px 18px rgba(100, 168, 255, 0.08),
+            0 0 80px 28px rgba(100, 168, 255, 0.03);
     }
 }
 .game-overlay {

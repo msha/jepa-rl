@@ -218,23 +218,154 @@ header {
 .game-section {
     border: 1px solid var(--border);
     border-radius: 3px;
-    overflow: hidden;
+    overflow: visible;
     background: #08080a;
     flex-shrink: 0;
     position: relative;
 }
 .game-header {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: center;
     gap: 8px;
     padding: 5px 10px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
 }
-.game-header .vdd {
+.game-header .gh-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     min-width: 0;
-    max-width: 200px;
+}
+.game-header .gh-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
+}
+.game-header .vdd {
+    min-width: 160px;
+    max-width: 280px;
+    isolation: isolate;
+    z-index: 10;
+}
+.game-header .vdd-trigger {
+    background: var(--surface) !important;
+    border: none !important;
+    box-shadow: none !important;
+    justify-content: center;
+    padding: 5px 26px 5px 10px;
+    border-radius: 4px;
+    position: relative;
+    z-index: 1;
+}
+.game-header .vdd-trigger:hover,
+.game-header .vdd--open > .vdd-trigger {
+    box-shadow: none !important;
+}
+.game-header .vdd-text {
+    text-align: center;
+    background: linear-gradient(90deg, #ffd166, #ff9a5c, #c49152, #ffd166);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: text-shimmer 4s ease infinite;
+    font-weight: 600;
+}
+.game-header .vdd-chevron {
+    position: absolute !important;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%) rotate(90deg) !important;
+    opacity: 0.9;
+    color: #c49152 !important;
+    filter: drop-shadow(0 0 3px rgba(244, 246, 251, 0.5));
+    transition:
+        opacity 0.15s,
+        transform 0.2s !important;
+}
+.game-header .vdd-chevron svg {
+    width: 12px !important;
+    height: 7px !important;
+    stroke-width: 2.2 !important;
+}
+.game-header .vdd--open > .vdd-trigger .vdd-chevron {
+    transform: translateY(-50%) rotate(180deg) !important;
+    opacity: 1;
+    color: #c49152 !important;
+    filter: drop-shadow(0 0 4px rgba(244, 246, 251, 0.6));
+}
+/* Animated prismatic border — diamond-like light refraction */
+.game-header .vdd::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: 5px;
+    background: linear-gradient(
+        60deg,
+        rgba(200, 220, 255, 0.9),
+        rgba(255, 240, 200, 0.7),
+        rgba(160, 200, 255, 0.8),
+        rgba(220, 200, 255, 0.6),
+        rgba(180, 230, 255, 0.7),
+        rgba(255, 225, 180, 0.8),
+        rgba(200, 220, 255, 0.9)
+    );
+    background-size: 400% 100%;
+    z-index: -1;
+    opacity: 0.35;
+    animation:
+        prism-shift 10s ease infinite,
+        prism-breathe 12s ease-in-out infinite;
+}
+.game-header .vdd:hover::after {
+    opacity: 0.7 !important;
+    inset: -1.5px;
+}
+.game-header .vdd--open::after {
+    opacity: 0.85 !important;
+    inset: -1.5px;
+}
+/* Dim border during active game states */
+.game-section.game-focused .game-header .vdd::after,
+.game-section.training .game-header .vdd::after,
+.game-section.evaluating .game-header .vdd::after,
+.game-section.collecting .game-header .vdd::after {
+    animation: none !important;
+    opacity: 0.08 !important;
+}
+@keyframes prism-shift {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
+}
+@keyframes prism-breathe {
+    0%,
+    100% {
+        opacity: 0.35;
+    }
+    50% {
+        opacity: 0.55;
+    }
+}
+@keyframes text-shimmer {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
 }
 .gh-title {
     font-size: 9px;
@@ -252,7 +383,6 @@ header {
     font-family: "IBM Plex Mono", monospace;
     font-size: 11px;
     color: var(--muted);
-    margin-left: auto;
 }
 .gh-stat strong {
     color: var(--text);
@@ -392,10 +522,14 @@ header {
 @keyframes ctrl-flicker {
     0%,
     100% {
-        opacity: 1;
+        box-shadow:
+            0 0 2px 2px var(--accent),
+            0 1px 1px rgba(0, 0, 0, 0.3);
     }
     50% {
-        opacity: 0.3;
+        box-shadow:
+            0 0 5px 5px var(--accent),
+            0 1px 1px rgba(0, 0, 0, 0.3);
     }
 }
 .ctrl-flicker {
@@ -426,6 +560,9 @@ header {
     justify-content: center;
     cursor: pointer;
     transition: all 0.1s;
+    box-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.4),
+        0 1px 1px rgba(0, 0, 0, 0.3);
 }
 .ctrl-dir:hover {
     background: var(--surface-2) !important;
@@ -435,7 +572,8 @@ header {
     background: rgba(196, 145, 82, 0.12) !important;
     border-color: var(--accent) !important;
     color: var(--accent) !important;
-    transform: scale(0.94);
+    transform: translateY(1px);
+    box-shadow: none;
 }
 .ctrl-dir-empty {
     cursor: default !important;
@@ -446,7 +584,8 @@ header {
     background: rgba(196, 145, 82, 0.15) !important;
     border-color: var(--accent) !important;
     color: var(--accent) !important;
-    box-shadow: 0 0 6px rgba(196, 145, 82, 0.35);
+    box-shadow: none;
+    transform: translateY(1px);
 }
 .ctrl-act {
     background: var(--bg) !important;
@@ -461,6 +600,9 @@ header {
     letter-spacing: 0.04em;
     cursor: pointer;
     transition: all 0.1s;
+    box-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.4),
+        0 1px 1px rgba(0, 0, 0, 0.3);
 }
 .ctrl-act:not(.ctrl-act-secondary) {
     min-width: 80px;
@@ -481,6 +623,8 @@ header {
     background: rgba(93, 158, 93, 0.1) !important;
     border-color: var(--green) !important;
     color: var(--green) !important;
+    transform: translateY(1px);
+    box-shadow: none;
 }
 .ctrl-act-secondary {
     color: var(--muted) !important;
@@ -532,10 +676,10 @@ header {
 .sv:has(.clickable-field)::before {
     content: "›";
     color: var(--accent);
-    transform: translateX(-12px);
-    position: absolute;
     font-size: 12px;
     line-height: 1;
+    margin-left: -12px;
+    margin-right: calc(12px - 0.6em);
 }
 .settings-table .game-desc {
     font-family: "Outfit", sans-serif;
@@ -543,357 +687,7 @@ header {
     font-style: italic;
 }
 
-/* Highscore board */
-.hs-board {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 0 0 2px 2px;
-}
-.hs-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 5px 8px;
-    border-bottom: 1px solid var(--border);
-}
-.hs-title {
-    font-size: 8px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted);
-}
-.hs-name-field {
-    flex-shrink: 0;
-}
-.hs-name-input {
-    width: 80px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    color: var(--green);
-    padding: 1px 4px;
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 9px;
-    outline: none;
-    text-align: right;
-}
-.hs-name-input:focus {
-    border-color: var(--accent);
-}
-.hs-name-input::placeholder {
-    color: var(--muted);
-    opacity: 0.5;
-}
-
-/* Empty state */
-.hs-empty {
-    padding: 14px 8px 12px;
-    text-align: center;
-}
-.hs-empty-dash {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 14px;
-    letter-spacing: 0.15em;
-    color: var(--border);
-    margin-bottom: 4px;
-}
-.hs-empty-text {
-    font-size: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted);
-    opacity: 0.6;
-}
-
-/* Table */
-.hs-table {
-    display: grid;
-}
-.hs-row {
-    display: grid;
-    grid-template-columns: 1.2rem 1.4rem 1.4fr 3.5rem 2.5rem 2rem 4rem 2.5rem;
-    gap: 0 2px;
-    padding: 4px 6px;
-    font-size: 11px;
-    border-left: 3px solid transparent;
-    align-items: start;
-    transition: background 0.2s;
-}
-.hs-row-head {
-    padding: 3px 6px 2px;
-    border-bottom: 1px solid var(--border);
-    border-left: none;
-    align-items: center;
-}
-.hs-col-label {
-    font-size: 6px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted);
-    opacity: 0.5;
-}
-
-/* Columns */
-.hs-col-rank,
-.hs-col-kind,
-.hs-col-player,
-.hs-col-algo,
-.hs-col-steps,
-.hs-col-apm,
-.hs-col-date,
-.hs-col-score {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* Rank */
-.hs-col-rank,
-.hs-rank {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 9px;
-    text-align: center;
-    color: var(--muted);
-    line-height: 1;
-}
-.hs-rank-gold {
-    color: #ffd166;
-    font-weight: 700;
-    text-shadow: 0 0 8px rgba(255, 209, 102, 0.4);
-    font-size: 11px;
-}
-.hs-rank-silver {
-    color: #c0c8d8;
-    font-weight: 600;
-    text-shadow: 0 0 6px rgba(192, 200, 216, 0.3);
-}
-.hs-rank-bronze {
-    color: #cd7f32;
-    font-weight: 600;
-    text-shadow: 0 0 6px rgba(205, 127, 50, 0.3);
-}
-
-/* Kind column */
-.hs-col-kind {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 7px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding-top: 2px;
-}
-.hs-kind-ai {
-    color: #64a8ff;
-}
-.hs-kind-human {
-    color: #27d6a0;
-    opacity: 0;
-}
-
-/* Algorithm column */
-.hs-col-algo {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 7px;
-    font-weight: 600;
-    color: #64a8ff;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    padding-top: 2px;
-}
-
-/* Steps column */
-.hs-col-steps {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 7px;
-    color: var(--text);
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    padding-top: 2px;
-}
-
-/* APM column */
-.hs-col-apm {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 7px;
-    color: var(--text);
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    padding-top: 2px;
-}
-
-/* Date column */
-.hs-col-date {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 7px;
-    color: var(--muted);
-    opacity: 0.7;
-    padding-top: 2px;
-}
-
-/* Score column */
-.hs-col-score {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 11px;
-    color: var(--text);
-    text-align: right;
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-}
-
-/* Player columns */
-.hs-col-player {
-    min-width: 0;
-}
-.hs-player-ai {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    line-height: 1.3;
-}
-.hs-ai-name {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 8px;
-    font-weight: 600;
-    color: #64a8ff;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.hs-ai-run-sub {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 7px;
-    color: var(--muted);
-    opacity: 0.6;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.hs-player-human {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 9px;
-    font-weight: 600;
-    color: #27d6a0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    line-height: 1;
-    padding-top: 1px;
-}
-
-/* Podium rows — gradient + glow */
-.hs-podium-gold {
-    background: linear-gradient(
-        135deg,
-        rgba(255, 209, 102, 0.1) 0%,
-        rgba(255, 209, 102, 0.03) 60%,
-        transparent 100%
-    );
-    border-left-color: #ffd166;
-    position: relative;
-}
-.hs-podium-gold::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 128 128' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-    pointer-events: none;
-    opacity: 0.5;
-}
-.hs-podium-gold .hs-col-score {
-    font-weight: 700;
-    color: #ffd166;
-}
-.hs-podium-gold .hs-ai-name {
-    text-shadow: 0 0 10px rgba(100, 168, 255, 0.3);
-}
-.hs-podium-gold .hs-player-human {
-    text-shadow: 0 0 10px rgba(39, 214, 160, 0.3);
-}
-
-.hs-podium-silver {
-    background: linear-gradient(
-        135deg,
-        rgba(192, 200, 216, 0.07) 0%,
-        rgba(192, 200, 216, 0.02) 60%,
-        transparent 100%
-    );
-    border-left-color: rgba(192, 200, 216, 0.4);
-    position: relative;
-}
-.hs-podium-silver::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 128 128' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-    pointer-events: none;
-    opacity: 0.4;
-}
-.hs-podium-silver .hs-col-score {
-    font-weight: 700;
-    color: #c0c8d8;
-}
-
-.hs-podium-bronze {
-    background: linear-gradient(
-        135deg,
-        rgba(205, 127, 50, 0.06) 0%,
-        rgba(205, 127, 50, 0.02) 60%,
-        transparent 100%
-    );
-    border-left-color: rgba(205, 127, 50, 0.35);
-    position: relative;
-}
-.hs-podium-bronze::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 128 128' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-    pointer-events: none;
-    opacity: 0.35;
-}
-.hs-podium-bronze .hs-col-score {
-    font-weight: 700;
-    color: #cd7f32;
-}
-
-/* Pagination */
-.hs-pagination {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 5px 8px;
-    border-top: 1px solid var(--border);
-}
-.hs-page-btn {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    color: var(--muted);
-    padding: 1px 8px;
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 9px;
-    cursor: pointer;
-    transition: all 0.15s;
-}
-.hs-page-btn:hover:not(:disabled) {
-    border-color: var(--accent);
-    color: var(--accent);
-}
-.hs-page-btn:disabled {
-    opacity: 0.3;
-    cursor: default;
-}
-.hs-page-info {
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 8px;
-    color: var(--muted);
-    opacity: 0.7;
-    min-width: 28px;
-    text-align: center;
-}
+/* Highscore board — styles are scoped in HighScoreBoard.vue */
 
 /* Metrics */
 .metrics {

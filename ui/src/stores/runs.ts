@@ -28,6 +28,7 @@ interface RunDetail {
 
 interface CollectedDataset {
   name: string
+  game: string
   episodes: number
   mean_score: number | null
   max_score: number | null
@@ -36,6 +37,9 @@ interface CollectedDataset {
   mean_length: number | null
   total_steps: number
   size_bytes: number
+  images_count?: number
+  images_size?: number
+  images_dir?: string
 }
 
 export const useRunsStore = defineStore('runs', () => {

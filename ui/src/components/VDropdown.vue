@@ -200,7 +200,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onClickOutside, true
 }
 
 .vdd-trigger--compact .vdd-text {
-  max-width: 110px;
+  max-width: none;
 }
 
 .vdd-trigger:not(:disabled):hover {
