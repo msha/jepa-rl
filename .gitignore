@@ -39,6 +39,7 @@ docs/*.pdf
 *.png
 *.jpg
 *.jpeg
+repomix-output.xml
 
 # OS/editor
 .DS_Store
